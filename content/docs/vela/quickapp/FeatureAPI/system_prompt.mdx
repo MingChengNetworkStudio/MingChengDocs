@@ -1,0 +1,206 @@
+---
+title: "system.prompt 弹窗提示"
+---
+
+> 显示轻提示（Toast）和模态对话框（Dialog），用于消息提示与用户确认。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.prompt` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（官方接口声明：`{ "name": "system.prompt" }`） |
+| 已验证机型 | 官方标准文档仅列出 `showToast`；`showDialog` 在固件中已注册实现（社区资料：洛汐文档库，Xiaomi Smart Band 10 Pro / Xiaomi Watch S4 41mm 均可用） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import prompt from '@system.prompt'
+// 本仓库运行时/测试中使用的写法
+const prompt = require('system.prompt')
+```
+
+## 功能概述
+
+`system.prompt` 提供两种界面提示能力：`showToast` 在屏幕底部显示一条自动消失的轻提示；`showDialog` 显示全屏模态对话框，带"确认/取消"两个按钮并通过回调返回用户选择。Native 层基于 LVGL 实现 UI：调用后任务被投递到 UI 线程，由 `PromptServer`（100ms 周期的 lv_timer）排队绘制——Toast 逐条显示、超时自动消失，Dialog 弹出后等待用户点击。两个方法均为**回调风格**且无返回值（JIDL 中为 `void`），不返回 Promise，也没有 fail 回调。
+
+> 官方标准文档仅公开了 `showToast`；固件实际还注册并实现了 `showDialog`（社区资料：洛汐文档库，与 openvela 开源 JIDL/C++ 实证一致）。
+
+## API
+
+### prompt.showToast(info)
+
+显示一条 Toast 轻提示，显示一段时间后自动消失。异步模型：无回调、无返回值（`void`）。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| message | string | 是 | - | 提示文本；为空字符串或 null 时不显示（Native 仅打印错误日志） |
+| duration | number/object | 否 | - | 显示时长（毫秒）。官方标准文档：单位 ms，默认值 **1500**，建议区间 1500–10000。openvela 实证：传 `0` 表示短时长（**2000ms**），传 `1` 表示长时长（**3500ms**）；不传时默认 **1500ms**；也可传数字表示毫秒数，但 Native 实际生效范围为 **1500–10000ms**，超出范围回退为 1500ms |
+
+**成功返回 / success 回调参数**
+
+无（JIDL 未定义回调）。
+
+**失败回调 fail / Promise reject**
+
+无失败回调。参数非法时（如 `message` 为空）Native 仅记录日志，不显示 Toast，也不向 JS 抛错。
+
+**示例**
+
+```js
+const prompt = require('system.prompt')
+
+// 默认时长（1500ms）
+prompt.showToast({ message: '保存成功' })
+
+// 短时长（0 -> 2000ms）
+prompt.showToast({ message: '已复制', duration: 0 })
+
+// 长时长（1 -> 3500ms）
+prompt.showToast({ message: '文件较大，请稍候……', duration: 1 })
+
+// 官方示例：直接传毫秒数
+prompt.showToast({
+  message: 'Message Info',
+  duration: 2000
+})
+```
+
+### prompt.showDialog(info)
+
+显示模态对话框，包含标题、正文和"确认/取消"按钮，用户点击后通过回调通知 JS。异步模型：回调风格（success / cancel / complete），无返回值（`void`），同步返回 `undefined`。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| title | string | 否 | `""` | 对话框标题 |
+| message | string | 是 | - | 对话框正文内容（传 null 时按空字符串处理） |
+| autocancel | boolean | 否 | `true` | 点击对话框按钮以外的遮罩区域是否可取消（触发 cancel）；`false` 时只能通过按钮关闭 |
+| success | function | 否 | - | 用户点击"确认"按钮时调用，参数为 `SuccessInfo`（含 `index`） |
+| cancel | function | 否 | - | 用户点击"取消"按钮、或在 `autocancel` 为真时点击遮罩区域时调用，无参数；`cancel` 表示弹窗被取消（例如点按外部区域），**不是**某个按钮索引 |
+| complete | function | 否 | - | 对话框关闭后必定调用一次（success/cancel 之后），无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| index | number | 用户点击的按钮序号：点击"确认"按钮为 `0` |
+
+**失败回调 fail / Promise reject**
+
+无失败回调（JIDL 未定义）。`cancel` 表示用户取消操作而非执行错误。因此参数错误或 UI 管理器不可用时，不会像其他 Feature 一样收到 `(message, code)` 错误回调（社区资料：洛汐文档库）。
+
+**示例**
+
+```js
+const prompt = require('system.prompt')
+
+prompt.showDialog({
+  message: '确定要删除该文件吗？',
+  autocancel: true,
+  success: function (ret) {
+    // 点击确认按钮：ret.index === 0
+    console.log('confirmed, index =', ret.index)
+  },
+  cancel: function  {
+    console.log('user cancelled')
+  },
+  complete: function  {
+    console.log('dialog closed')
+  }
+})
+
+// 仅展示信息、不关心回调
+prompt.showDialog({ title: '关于', message: '版本 1.0.0' })
+```
+
+社区资料给出的 **Promise 封装**写法（洛汐文档库），便于在 async/await 流程中使用：
+
+```js
+function showDialog(options) {
+  return new Promise((resolve, reject) => {
+    prompt.showDialog({
+      ...options,
+      success: ({ index }) => resolve({ type: 'button', index }),
+      cancel:  => resolve({ type: 'cancel' }),
+      complete:  => {}
+    })
+  })
+}
+
+const result = await showDialog({
+  message: '确认继续？',
+  autocancel: false
+})
+```
+
+## 数据结构
+
+### SuccessInfo
+
+`showDialog` 的 success 回调参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| index | number | 被点击按钮的序号；当前版本"确认"按钮固定返回 `0` |
+
+### button
+
+JIDL 中定义的按钮结构：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 按钮文字 |
+| color | string | 按钮文字颜色 |
+
+> **注意**：当前版本 JIDL 的 `DialogInfo` **未包含 buttons 字段**，`showDialog` 不接收自定义按钮；Native 对话框固定提供"确认"（右下角蓝色对勾图标）和"取消"（左下角取消图标）两个按钮。`button` 结构（`{ text, color }`）为接口预留痕迹，当前没有稳定公开的按钮数组字段，不应依赖（社区资料：洛汐文档库），具体行为以 Native 实现为准。
+
+## 注意事项
+
+- **UI 线程与队列模型**：`showToast`/`showDialog` 调用后立即返回，实际绘制在 UI 线程完成。`PromptServer` 以 100ms 为周期调度：
+  - Toast 同一时刻只显示一条，当前一条超时消失后才显示队列中的下一条；队列上限 **10 条**，超出时最早入队的 Toast 会被丢弃。
+  - Dialog 入队后在调度周期中弹出，全屏模态遮罩，一直停留到用户操作（无自动超时）。
+- **调用时机**：JIDL 没有定义 `fail` 回调，参数错误或 UI 管理器不可用时不一定能收到错误。调用前应确保应用仍在前台、页面未销毁，并避免同时弹出多个对话框（社区资料：洛汐文档库）。
+- **Toast 时长规则**（以 Native 实现为准）：
+  - 不传 `duration`：1500ms（与官方默认值一致）；
+  - `duration: 0`：短时长 2000ms；`duration: 1`：长时长 3500ms；
+  - 传其他数字按毫秒处理，但 Toast 控件只接受 **1500–10000ms**（官方建议区间同为 1500–10000），超出范围静默回退为 1500ms；
+  - Toast 消失前最后 375ms 有淡出动画。
+- **Toast 样式**：显示在屏幕底部居中（距底部约 50px），深色圆角胶囊背景（RGB 36/36/36，约 95% 不透明度）、白色文字，字号 20；文本过长时自动换行并以省略号截断。
+- **Dialog 交互**：
+  - 点击右下角"确认"按钮 → success 回调（`index: 0`）；
+  - 点击左下角"取消"按钮 → cancel 回调；
+  - `autocancel: true`（默认）时点击按钮之外的遮罩区域 → cancel 回调；`autocancel: false` 时点击遮罩不关闭；
+  - 对话框对象销毁后触发 complete 回调（即 success/cancel 之后必定调用一次）。
+- **字体**：UI 文字通过 `vg_font`（FreeType）加载，默认字体为 `MiSansW_Regular`（正文）/ `MiSansW_Demibold`（标题），Toast 字号 20、Dialog 正文 34、标题 36，均可通过 Kconfig（`CONFIG_FONT_DEFAULT_*`）调整。
+- **依赖运行环境**：该 Feature 依赖应用的 GUI 环境（LVGL/uikit）；若 `PromptManager` 初始化不可用，调用仅打印告警日志，不会显示任何界面，也不会回调。
+- JIDL 未定义 fail 回调与 Promise，参数错误不会以异常形式抛给 JS，调用方无需（也无法）捕获失败。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

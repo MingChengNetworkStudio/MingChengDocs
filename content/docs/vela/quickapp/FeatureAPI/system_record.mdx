@@ -1,0 +1,255 @@
+---
+title: "system.record 录音"
+---
+
+> 通过麦克风录制音频，支持 wav / opus / pcm 格式，可配置采样率、声道数、码率和录音时长，录音文件保存到应用缓存目录。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.record` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（录音设备访问由系统媒体服务管控） |
+
+## 接口声明
+
+```json
+{ "name": "system.record" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import record from '@system.record'
+// 或
+const record = require('@system.record')
+// 本仓库运行时/测试中使用的写法
+const record = require('system.record')
+```
+
+## 功能概述
+
+`system.record` 提供麦克风录音能力：调用 `start` 启动录音，录音文件自动写入应用沙箱 `cache` 目录，文件名按启动时间生成；调用 `stop` 停止录音，或设置 `duration` 让 Native 到时自动停止。
+
+Native 层基于 multimedia 框架的 `media_uv_recorder_*` 异步接口（libuv 事件循环）与 media server 通信，录音输入源固定为麦克风（`MEDIA_SOURCE_MIC`，即 `"Capture"`）；编译开启 `CONFIG_MEDIA_FOCUS` 时会通过 `media_uv_recorder_start_auto` 以 `Record` 场景申请音频焦点。录音参数（采样率/声道/码率/格式）会被拼成 options 字符串传给 recorder 的 prepare 接口。
+
+典型使用场景：语音消息、录音备忘。可参考 `openvela/packages/apps/wearable/vela-sample/src/interface/system/record/index.ux`。
+
+## API
+
+### record.start(info)
+
+开始录音。回调风格，无 Promise 形式。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| duration | number(int) | 否 | `0` | 录音时长，单位**毫秒**。`0` 表示不自动停止，需手动调用 `stop`；大于 0 时 Native 启动定时器，到时自动停止并关闭录音。录音过程中被打断会立刻结束并返回录音结果。 |
+| sampleRate | number(int) | 否 | `8000` | 采样率，如 8000、16000、44100 等；传 0 时按默认 8000 处理。不同音频格式支持的采样率范围不同，官方建议使用 8000/16000/32000/44100/48000。 |
+| numberOfChannels | number(int) | 否 | `1` | 录音通道数，仅支持 `1`（mono）或 `2`（stereo），其他值返回参数错误。 |
+| encodeBitRate | number(int) | 否 | `16000` | 编码码率（bps），透传给录音器 options。码率取值与采样率和音频格式有关，可参考下文比特率参考表；输入错误的值时底层会按采样率及通道数计算出合适的比特率。 |
+| format | string | 否 | `"pcm"` | 录音格式，仅支持 `"wav"` / `"opus"` / `"pcm"`：`pcm` 实际按 `s16le`（16bit 小端 PCM）裸流录制；`opus` 使用 vbr=0、compression_level=1 的固定码率编码。 |
+| success | function | 否 | - | 回调签名 `success(data: object)`，**录音成功启动后即回调**，`data.uri` 为录音文件地址，见下表。 |
+| fail | function | 否 | - | 回调签名 `fail(msg: string, code: number)`。 |
+| complete | function | 否 | - | 回调签名 `complete(msg: string)`，`msg` 为 `"success"` 或 `"fail"`。 |
+| `frameSize` | number(int) | 否 | - | **官方标准定义，openvela 实证 JIDL 未声明该字段，当前实现不支持**。PCM 音频数据帧大小，单位 Byte；传入后每录制指定帧大小的内容会通过 `onframerecorded` 事件回调录制内容，不指定则不回调。 |
+
+> 官方标准文档描述：`encodeBitRate` 默认值为 128000。
+>
+> 官方标准文档描述：`success` 为"录音完成成功回调"、`complete` 为"录音结束后的回调"，即录音结束（停止/被打断）时才回调。
+
+**PCM / WAV 比特率参考（官方标准资料）**
+
+对于 pcm/wav 录音场景，如果输入的是错误的比特率，编码器会根据采样率和通道数计算出比特率。
+
+| 采样率 (Hz) | 声道数 | 比特率 (bp/s) |
+| --- | --- | --- |
+| 8000 | 1 | 128000 |
+| 8000 | 2 | 256000 |
+| 16000 | 1 | 256000 |
+| 16000 | 2 | 512000 |
+| 32000 | 1 | 512000 |
+| 32000 | 2 | 1024000 |
+| 44100 | 1 | 705600 |
+| 44100 | 2 | 1411200 |
+| 48000 | 1 | 768000 |
+| 48000 | 2 | 1536000 |
+
+**Opus 比特率参考（官方标准资料）**
+
+使用 opus 格式录音时，下表中的比特率范围对应特定的采样率和声道数，此时压缩比/算法效率最佳；设置的比特率不在此范围时也可以正常录音，但压缩比和算法效率不是最佳。
+
+| 采样率 (Hz) | 声道数 | 比特率 (bp/s) |
+| --- | --- | --- |
+| 8000 | 1 | 8363 ~ 12800 |
+| 8000 | 2 | 13892 ~ 19200 |
+| 12000 | 1 | 11975 ~ 20400 |
+| 12000 | 2 | 25427 ~ 34400 |
+| 16000 | 1 | 14221 ~ 22800 |
+| 16000 | 2 | 31651 ~ 44000 |
+| 24000 | 1 | 24892 ~ 34000 |
+| 24000 | 2 | 47685 ~ 64800 |
+| 48000 | 1 | 50077 ~ 67200 |
+| 48000 | 2 | 98554 ~ 103600 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 录音文件地址，格式为 `internal://cache/audio<YYYYMMDDHHMMSS>.<format>`（如 `internal://cache/audio20240101120000.wav`）。文件物理路径为应用沙箱下 `cache/<包名>/` 目录中的同名文件。 |
+
+> 注意：`success` 在录音**开始**时回调（此时文件正在写入），录音内容完整落盘要等 `stop` 或 `duration` 到时自动停止之后。
+
+**失败回调 fail**
+
+- 参数：`(msg: string, code: number)`
+- 错误码/错误信息（均由 Native 实现返回）：
+
+| code | msg | 触发条件 |
+| ---- | --- | -------- |
+| 202 | `"invalid number of channels"` | `numberOfChannels` 不是 1 或 2 |
+| 202 | `"format is NULL"` | `format` 为空 |
+| 202 | `"invalid format"` | `format` 不是 `wav`/`opus`/`pcm` |
+| 202 | `"record failed can't get localtime"` | 获取系统时间失败（无法生成文件名） |
+| 202 | `"record open failed"` | 录音器打开失败 |
+| 205 | `"recordbusy"` | 已有录音正在进行（重复 start） |
+
+> 官方标准文档还定义了错误码 **200（系统空间不足）**，并将 202 概括为"参数错误"、205 为"录音已在进行中"；openvela 实证中 prepare/start 过程的底层失败会关闭录音器，错误信息以 Native 日志为准（具体行为以 Native 实现为准）。
+
+**示例**
+
+```js
+const record = require('system.record')
+
+// 使用默认参数（8000Hz / 单声道 / 16000bps / pcm）录音，手动停止
+record.start({
+  success: function (data) {
+    console.log('录音已开始，文件地址:', data.uri)
+  },
+  fail: function (msg, code) {
+    console.log('start fail:', code, msg)
+  },
+  complete: function (msg) {
+    console.log('start complete:', msg)
+  }
+})
+
+// 指定 wav 格式、16kHz、单声道、录 5 秒后自动停止
+record.start({
+  duration: 5000,
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  encodeBitRate: 32000,
+  format: 'wav',
+  success: function (data) {
+    console.log('录音文件:', data.uri)
+  },
+  fail: function (msg, code) {
+    console.log('start fail:', code, msg)
+  }
+})
+```
+
+### record.stop
+
+停止录音。无参数、无返回值、无回调。
+
+- 若设置了 `duration` 自动定时器，会先停止定时器；随后停止并关闭录音器，录音文件完成写入。
+- 当前没有正在进行的录音时调用为空操作。
+- 停止完成后录音器关闭、内部状态复位，可以再次调用 `start` 开始新的录音。
+
+**示例**
+
+```js
+const record = require('system.record')
+
+record.stop
+```
+
+## 事件
+
+### record.onframerecorded（官方标准定义，openvela 实证未收录）
+
+> 官方标准文档定义了流式录音事件 `onframerecorded`：设置 `frameSize` 后，每录制完指定帧大小的内容会回调此事件。**openvela 实证 JIDL 未声明 `frameSize` 参数与 `onframerecorded` 事件，当前实现不支持流式回调**，录音结果仅通过 `success` 回调返回文件 uri。以下为官方标准定义，供对照参考。
+
+回调参数对象：
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| frameBuffer | Uint8Array | 录制的音频数据帧。通常音频数据帧大小为指定的 frameSize，但指定值太小时会自动调整为一个合适的大小 |
+| isLastFrame | boolean | 是否是最后一帧数据 |
+
+官方标准示例：
+
+```javascript
+record.onframerecorded = function (res) {
+  // 获取音频数据：res.frameBuffer
+  // 是否是最后一帧：res.isLastFrame
+  console.log('==== onframerecorded', res)
+}
+```
+
+官方标准中的相关说明：
+
+1. 当录音被打断时，结束当前录制并调用成功回调返回录制文件地址，调用完成回调结束前次录制；流式录音 `onframerecorded` 会上报最后一帧完成录制。
+2. `frameSize` 大小受限于底层 socket 单次数据传输的大小，有效范围最大值为 4096，设置大于此范围按最大值生效；设置此参数时 success 回调将不返回 uri；传入非法值（如小于等于零的数）时 success 回调的 uri 正常返回，`onframerecorded` 事件不会触发。
+
+## 属性（property）
+
+无。JIDL 中未定义 property（官方标准中的 `onframerecorded` 以事件回调属性形式使用，见上节，openvela 实证未收录）。
+
+## 数据结构
+
+### SetInfo
+
+`start(info)` 的参数对象：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| duration | number(int) | 录音时长（毫秒），0 表示不自动停止，默认 0 |
+| sampleRate | number(int) | 采样率，默认 8000，建议使用 8000/16000/32000/44100/48000 |
+| numberOfChannels | number(int) | 声道数，1=mono（默认），2=stereo |
+| encodeBitRate | number(int) | 编码码率，默认 16000（实证） |
+| format | string | 录音格式：`wav` / `opus` / `pcm`（默认） |
+| success | function | 成功回调 `success(data: { uri: string })` |
+| fail | function | 失败回调 `fail(msg: string, code: number)` |
+| complete | function | 完成回调 `complete(msg: string)`，`msg` 为 `"success"`/`"fail"` |
+
+## 注意事项
+
+- **文件位置**：录音文件固定保存到应用沙箱 `cache/<包名>/` 目录，文件名 `audio<年月日时分秒>.<format>`（按 `start` 时刻生成）；JS 拿到的地址是 `internal://cache/<文件名>`，可配合 `system.file` 或 `system.audio` 的 `internal://` 路径访问。
+- **success 回调时机**：openvela 实证中录音**启动成功**即回调 success（返回文件 uri），不是录音结束；自动停止（duration 到时）或 `stop` 之后没有额外的 JS 结束通知，如需感知录音结束请自行按 `duration` 计时。
+- **并发限制**：同一时刻只能有一路录音，重复 `start` 返回 code 205（`recordbusy`）。
+- **录音被打断（官方标准描述）**：录音过程中若发生 SCO 电话、Ring 铃声、Alarm 闹钟、Enforced 求救音、Notify 通知消息、开启另外一个录音等操作，会抢夺音频焦点打断当前录音，使其状态变更为 stop；被打断的录音会结束并返回录制结果。
+- **格式说明**：`pcm` 为 s16le 裸数据（无文件头），需要播放/解析时自行加头或使用 wav；`opus`/`wav` 的参数通过 options 字符串（`format=...:sample_rate=...:ch_layout=mono|stereo:b=...`）传给媒体服务。
+- **时长单位为毫秒**，与快应用其他接口常见的秒不同，请注意换算。
+- **麦克风源固定**：Native 固定使用 `MEDIA_SOURCE_MIC`（`"Capture"`），不支持选择其他输入源。
+- **采样率增益（官方标准描述）**：部分产品 bes 层针对采样率 16000 单声道的录制有增益处理，录制出的音频音量比其他配置音量大。
+- 参考用例：`openvela/packages/apps/wearable/vela-sample/src/interface/system/record/index.ux`。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 不支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

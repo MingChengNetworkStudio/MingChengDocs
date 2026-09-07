@@ -1,0 +1,140 @@
+---
+title: "system.zip ZIP 归档解压"
+---
+
+> 将 zip 压缩包解压到应用沙箱指定目录（当前版本仅提供解压能力）。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.zip` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.zip" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import zip from '@system.zip'
+// 或
+const zip = require('@system.zip')
+// 本仓库运行时/测试中使用的写法
+const zip = require('system.zip')
+```
+
+## 功能概述
+
+`system.zip` 用于把应用沙箱中的一个 `.zip` 归档解压到指定目录：底层在 libuv 线程池中调用 minizip（`unzOpen64` / `unzGoToNextFile` 等）逐个读取归档条目并写文件，自动按需递归创建目录，并按归档中记录的时间戳恢复文件时间。解压在后台线程执行，不阻塞 JS 线程，结束后通过 success/fail/complete 回调通知结果。
+
+> 与 `system.zlib` 的区别：`system.zip` 处理 **zip 归档**（包含多个文件/目录的压缩包）；`system.zlib` 处理**单流 deflate 压缩**（单个数据流的压缩/解压），二者不通用。
+
+## API
+
+### zip.decompress(params)
+
+解压 zip 归档（解压文件）。异步模型为**回调风格**（success/fail/complete），无返回值。
+
+**参数（params 对象字段，JIDL struct `DecompressInfo`）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| srcUri | string | 是 | - | 源 zip 文件路径（源文件的 uri，不能是 tmp 类型的 uri）。通常为 `internal://` 应用相对路径（如 `internal://files/test.zip`）；也支持以 `/` 开头的绝对路径（Native 侧映射到应用安装目录下）。文件不存在时会自动再尝试追加 `.zip` 后缀打开。路径长度上限约 255 字符 |
+| dstUri | string | 是 | - | 解压目标目录（目标目录的 uri，不能是应用资源路径和 tmp 类型的 uri），`internal://` 应用相对路径（如 `internal://files/out`）。目录不存在时会自动递归创建（权限 0777）。**不允许使用 `internal://tmp` 临时目录** |
+| success | function（`success_cb`） | 否 | - | 解压成功回调，签名 `cb`，无参数 |
+| fail | function（`fail_cb`） | 否 | - | 解压失败回调，签名 `cb(data: string, code: number)` |
+| complete | function（`complete_cb`） | 否 | - | 结束回调（成功/失败都会调用），无参数 |
+
+**成功返回 / success 回调参数**：无参数。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- Native 实现中实际返回的错误码/错误信息：
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `ARGSERROR` | `invalid file path` | `srcUri`/`dstUri` 为空、路径位于 `internal://tmp` 临时目录，或路径无法转换为沙箱绝对路径 |
+| 301 | `PATH_NOT_EXISTS` | `src path invalid!` | 源 zip 文件不存在或不可访问（同时尝试过 `<srcUri>.zip` 仍失败） |
+| 300 | `IOERROR` | `create dst path failed!` | 目标目录创建失败 |
+| 300 | `IOERROR` | libuv 错误描述（`uv_strerror(status)`） | 解压工作线程执行失败；libuv 状态码 `-2`（ENOENT）映射为 301，`-22`（EINVAL）映射为 202，其余映射为 300 |
+| 200 | `GENERAL` | `malloc fail` / `uvloop is null` | 内部内存分配失败或事件循环不可用 |
+
+> 官方标准文档描述：fail 错误码仅列出 202（参数错误）与 300（I/O 错误）。openvela 实证实现中，源文件不存在返回 301（`PATH_NOT_EXISTS`），内存分配失败/事件循环异常返回 200（`GENERAL`）。
+
+**示例**
+
+```js
+const zip = require('system.zip')
+
+zip.decompress({
+  srcUri: 'internal://files/test.zip',
+  dstUri: 'internal://files/unzip_out',
+  success: function  {
+    console.log('decompress success')
+  },
+  fail: function (data, code) {
+    console.log('decompress fail', code, data)
+  },
+  complete: function  {
+    console.log('decompress complete')
+  }
+})
+```
+
+官方标准文档示例（cache 分区解压到 files 分区）：
+
+```js
+zip.decompress({
+  srcUri: 'internal://cache/test.zip',
+  dstUri: 'internal://files/unzip/',
+  success: function  {
+    console.log(`handling success`)
+  },
+  fail: function (data, code) {
+    console.log(`handling fail, code = ${code}`)
+  }
+})
+```
+
+## 注意事项
+
+- **仅支持解压**：当前 JIDL/Native 只提供 `decompress`，不提供压缩（创建 zip）能力。
+- **路径约束**：
+  - `srcUri`、`dstUri` 推荐使用 `internal://` 应用沙箱路径；`internal://tmp` 临时目录会被拒绝（`ARGSERROR`）；`dstUri` 也不能是应用资源路径（包内只读资源）。
+  - `srcUri` 以 `/` 开头时按应用安装目录拼接（启用 `CONFIG_QUICKAPP` 时为 `<CONFIG_HAP_APP_PATH>/app/<包名><srcUri>`，否则为 `data/app/<包名><srcUri>`）。
+  - 目标目录不存在时自动递归创建；归档内的目录条目以 0755 创建，文件按归档内相对路径写入目标目录，并恢复归档记录的文件修改时间。
+- **打开策略**：若 `srcUri` 打开失败，Native 侧会自动尝试 `srcUri + ".zip"`；源路径在工作线程中按 256 字节缓冲截断处理（`MAXFILENAME = 256`），过长路径可能被截断。
+- **加密归档**：Native 实现解压时密码固定为 `NULL`，**不支持加密/带密码的 zip**；加密条目会导致解压失败。
+- **线程与生命周期**：解压任务在 libuv 线程池（`uv_queue_work`）中执行。页面销毁时，**尚未开始**的任务会被取消（不触发任何回调）；**正在执行**的任务会继续跑完，但页面已 detach 时 JS 回调不再触发。同一页面可并发发起多个解压任务。
+- 错误码取值：`GENERAL = 200`、`ARGSERROR = 202`、`IOERROR = 300`、`PATH_NOT_EXISTS = 301`（定义于 `modules/feature_config.h`）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

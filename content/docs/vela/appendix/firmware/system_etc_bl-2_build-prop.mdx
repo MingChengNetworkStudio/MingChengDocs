@@ -1,0 +1,26 @@
+---
+title: "BL2 build.prop"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 203 字节  
+SHA-256 |  `7ed497f987f8ab85a310a3df4bc7159a410d534130071fd63bdfc740a38c73d0`  
+使用阶段 | 二级引导环境  
+  
+BL2 的构建属性用于引导日志、版本识别和少量设备类型判断。它比 AP 版本精简。
+
+## 属性
+属性 | 值 | 说明  
+---|---|---  
+`ro.build.version` |  `3.101.036` | 与 AP 对齐的系统版本  
+`ro.build.customer_version` |  `CONBINE_LTALM078_T` | 精简的产品构建族标识  
+`ro.product.device.screenshape` |  `rect` | 矩形屏幕  
+`ro.product.device.devicetype` |  `band` | 手环产品  
+`ro.build.id` |  `CONBINE_LTALM078_T3.101.036` | 完整构建 ID  
+  
+BL2 没有 `ro.sf.lcd_density`，因为引导阶段不承担正常 AP UI 的密度布局。它和 OTA 的 `build.prop` 完全相同。
+
+## 修改影响
+改这里不会改变 AP 启动后的 `getprop` 结果，因为 AP 会使用自己的 `/etc/build.prop`。它可能影响 BL2/OTA 版本日志或引导侧的兼容检查。若想伪造整机版本，需要同时理解 AP、BL2、OTA 和升级服务各自读取哪套属性，单改一份容易造成版本不一致。

@@ -1,0 +1,55 @@
+---
+title: Keyboard
+description: 键盘控件
+---
+
+继承自 [Object](/docs/vela/LUA/LVGL/widgets/object)
+
+## 创建
+
+```lua
+local kb = parent:Keyboard {
+  w = lvgl.HOR_RES,
+  h = 120,
+  bg_color = lvgl.color_hex(0x202020),
+}
+```
+
+## 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| 继承 Object 通用属性 | — | `w`, `h`, `align`, `bg_color` 等 |
+
+## 方法
+
+| 方法 | 说明 |
+|------|------|
+| 无特有方法 | 仅支持 Object 通用方法 |
+
+## 示例
+
+```lua
+local kb = lvgl.Keyboard(nil, {
+  y = lvgl.VER_RES - 120,
+  w = lvgl.HOR_RES,
+  h = 120,
+  bg_color = lvgl.color_hex(0x1a1a1a),
+  border_width = 1,
+})
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+洛汐文档库补充的 Keyboard 专用属性：
+
+| 属性 | 说明 |
+|------|------|
+| `mode` | 键盘模式（大小写 / 数字 / 特殊字符等布局） |
+| `textarea` | 绑定的 Textarea 控件，键盘输入直接写入该 Textarea |
+
+即 Keyboard 通过 `textarea` 属性与 Textarea 关联绑定，无需手动转发按键事件。
+
+参考来源：官方 docs-lua / 洛汐文档库

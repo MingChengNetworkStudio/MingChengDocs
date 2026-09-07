@@ -1,0 +1,406 @@
+---
+title: "system.media.audio 音频播放/录音（Rust 实现，UNSTABLE）"
+---
+
+> 创建音频播放器（AudioPlayer）、音频输出轨（AudioTrack）与录音器（AudioRecorder）。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.media.audio`（注意：与快应用常见的 `system.audio` 是**不同的模块名**） |
+| Feature 类型 | **Rust 实现 Feature**（**不稳定版**；位于 `CONFIG_FEATURE_RUST_MODULES_UNSTABLE` 开关下，依赖总开关 `CONFIG_FEATURE_RUST_MODULES`，接口与行为可能变更） |
+| 所需权限 | 模块本身无权限要求；`AudioRecorder.start` 需要 `blueos.permission.RECORD` |
+
+> ⚠️ **当前实现状态**：本模块为 Rust feature 的接口示例/骨架实现，三个对象的方法当前仅打印日志并返回演示用的固定值（详见下文"当前 Rust 实现行为"），事件（`onplay`/`onerror` 等）的发送函数已由 JIDL 生成但实现侧**暂未触发**。接口面以 JIDL 为准，实际音频行为以 Native 实现为准。
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import audio from '@system.media.audio'
+// 本仓库运行时/测试中使用的写法
+const audio = require('system.media.audio')
+```
+
+## 功能概述
+
+`system.media.audio` 是一个工厂模块，提供三个同步构造方法：`createAudioPlayer`（媒体播放器，播放 `src` 音源，支持进度/时长/播放次数等属性与 seek）、`createAudioTrack`（低延迟音频输出轨，应用自行写入 PCM 数据）、`createAudioRecorder`（录音器，可启动/暂停/恢复/停止录音，支持 uri 输出与数据回调）。三个方法均通过 JIDL `[ctor="true"]` 声明，返回带有属性、方法与事件的 interface 对象（`target` 分别为 `native_player`/`native_track`/`native_recorder`）。
+
+## 常量
+
+JIDL 定义的流类型常量（常量名照抄 JIDL，拼写为 `STEAM_TYPE`）：
+
+| 常量 | 值 |
+| ---- | -- |
+| `STEAM_TYPE.MUSIC` | `"music"` |
+
+## API
+
+### audio.createAudioPlayer(params)
+
+创建一个音频播放器实例（同步返回）。
+
+**参数（CreatePlayerParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| streamType | string | 否 | `"music"` | 流类型，当前 JIDL 仅定义 `"music"` |
+
+**返回值**
+
+`AudioPlayer` 实例对象。
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+
+const player = audio.createAudioPlayer({ streamType: audio.STEAM_TYPE.MUSIC })
+// 或使用默认参数：
+// const player = audio.createAudioPlayer
+
+player.src = 'https://example.com/test.mp3'
+player.onplay = function  { console.log('play') }
+player.onended = function  { console.log('ended') }
+player.onerror = function (data, code) { console.log('error', code, data) }
+player.play
+```
+
+### AudioPlayer 接口
+
+**属性**
+
+| 属性 | 类型 | 读写 | 默认值 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+| src | string | 读写 | `""` | 播放音源地址 |
+| duration | number（double） | 只读 | - | 媒体总时长（秒） |
+| state | string | 读写 | `"stopped"` | 播放状态 |
+| currentTime | number（long） | 读写 | `-1` | 当前播放位置（秒） |
+| playcount | number（int） | 读写 | `0` | 播放次数 |
+
+**方法**
+
+| 方法 | 异步模型 | 说明 |
+| ---- | ---- | ---- |
+| `play` | 同步 void | 开始播放 |
+| `pause` | 同步 void | 暂停播放 |
+| `stop` | 同步 void | 停止播放 |
+| `release` | 同步 void | 释放播放器资源 |
+| `seek(params)` | `Promise<void>` | 跳转到指定位置，参数 `PlayerSeekParams { currentTime: number(int) }` |
+
+**seek 参数（PlayerSeekParams）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| currentTime | number（int） | 是 | 目标播放位置 |
+
+**seek 的 Promise reject**
+
+| code | message | 触发场景（当前 Rust 实现） |
+| ---- | ------- | -------- |
+| 400 | `params is none` | 未传参数对象 |
+| 400 | `start rejected` | `currentTime <= 0` |
+
+**事件**（以属性赋值方式注册回调）
+
+| 事件 | 回调签名 | 说明 |
+| ---- | ---- | ---- |
+| `onplay` | `` | 开始播放 |
+| `onpause` | `` | 暂停 |
+| `onstop` | `` | 停止 |
+| `onended` | `` | 播放结束 |
+| `onerror` | `(data: string, code: number)` | 播放出错 |
+| `ontimeupdate` | `` | 播放进度更新 |
+| `ondurationchange` | `` | 时长变化 |
+| `onloadeddata` | `` | 媒体数据加载完成 |
+| `oninterrupt` | `(action: interruptAction)` | 音频中断事件，参数见数据结构 |
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+const player = audio.createAudioPlayer({ streamType: 'music' })
+
+player.src = 'internal://cache/test.mp3'
+player.playcount = 1
+
+player.onplay = function  { console.log('onplay, state:', player.state) }
+player.onpause = function  { console.log('onpause') }
+player.onstop = function  { console.log('onstop') }
+player.onended = function  { console.log('onended') }
+player.ontimeupdate = function  {
+  console.log('time:', player.currentTime, '/', player.duration)
+}
+player.ondurationchange = function  {
+  console.log('duration:', player.duration)
+}
+player.onloadeddata = function  { console.log('loadeddata') }
+player.oninterrupt = function (action) {
+  console.log('interrupt:', action.interruptHint, action.actionType)
+}
+player.onerror = function (data, code) {
+  console.log('player error:', code, data)
+}
+
+player.play
+player.pause
+player.stop
+
+// seek 为 Promise 风格
+player.seek({ currentTime: 30 }).then( => {
+  console.log('seek ok')
+}).catch(err => {
+  console.log('seek fail', err.code, err.data)
+})
+
+player.release
+```
+
+### audio.createAudioTrack(params)
+
+创建一个音频输出轨实例（同步返回），用于应用自行写入 PCM 音频数据播放。
+
+**参数（CreateTrackParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| streamType | string | 否 | `"music"` | 流类型 |
+| sampleRateInHz | number（int） | 否 | `16000` | 采样率（Hz） |
+| channelConfig | number（int） | 否 | `1` | 声道配置 |
+| audioFormat | number（int） | 否 | `16` | 音频位宽/格式 |
+
+**返回值**
+
+`AudioTrack` 实例对象。
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+
+const track = audio.createAudioTrack({
+  streamType: 'music',
+  sampleRateInHz: 16000,
+  channelConfig: 1,
+  audioFormat: 16
+})
+```
+
+### AudioTrack 接口
+
+**属性**
+
+| 属性 | 类型 | 读写 | 默认值 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+| state | string | 读写 | `"stopped"` | 输出轨状态 |
+
+**方法**
+
+| 方法 | 异步模型 | 说明 |
+| ---- | ---- | ---- |
+| `play` | 同步 void | 开始/进入可写状态 |
+| `write(params)` | `Promise<long>` | 写入一帧音频数据，参数 `TrackWriteParams { buffer: ArrayBuffer }`，resolve 值为写入的字节数（long） |
+| `pause` | 同步 void | 暂停 |
+| `stop` | 同步 void | 停止 |
+| `release` | 同步 void | 释放资源 |
+
+**write 参数（TrackWriteParams）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| buffer | ArrayBuffer | 是 | 要写入的 PCM 音频数据 |
+
+**事件**
+
+| 事件 | 回调签名 | 说明 |
+| ---- | ---- | ---- |
+| `onplay` | `` | 开始播放/写入 |
+| `onpause` | `` | 暂停 |
+| `onstop` | `` | 停止 |
+| `onerror` | `(data: string, code: number)` | 出错 |
+| `oninterrupt` | `(action: interruptAction)` | 音频中断事件 |
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+
+const track = audio.createAudioTrack({ sampleRateInHz: 16000 })
+
+track.onplay = function  { console.log('track play') }
+track.onerror = function (data, code) { console.log('track error', code, data) }
+track.oninterrupt = function (action) {
+  console.log('interrupt:', action.interruptHint, action.actionType)
+}
+
+track.play
+
+// 写入 PCM 数据（Promise 风格，resolve 写入字节数）
+const pcm = new Uint8Array(320).buffer
+track.write({ buffer: pcm }).then(written => {
+  console.log('written bytes:', written)
+}).catch(err => {
+  console.log('write fail', err.code, err.data)
+})
+
+track.pause
+track.stop
+track.release
+```
+
+### audio.createAudioRecorder(params)
+
+创建一个录音器实例（同步返回）。
+
+**参数（CreateRecorderParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| outputFormat | string | 否 | `"pcm"` | 输出格式 |
+| sampleRateInHz | number（int） | 否 | `8000` | 采样率（Hz） |
+| numberOfChannels | number（int） | 否 | `1` | 声道数 |
+| audioFormat | number（int） | 否 | `16` | 音频位宽/格式 |
+
+**返回值**
+
+`AudioRecorder` 实例对象。调用 `start` 需要 `blueos.permission.RECORD` 权限。
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+
+const recorder = audio.createAudioRecorder({
+  outputFormat: 'pcm',
+  sampleRateInHz: 8000,
+  numberOfChannels: 1,
+  audioFormat: 16
+})
+```
+
+### AudioRecorder 接口
+
+**方法**
+
+| 方法 | 异步模型 | 所需权限 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `start(params)` | `Promise<string>` | `blueos.permission.RECORD` | 开始录音，参数 `RecorderStartParams { uri: string = "" }`（录音输出 uri，默认空串），resolve 值为字符串结果 |
+| `pause` | 同步 void | - | 暂停录音 |
+| `resume` | 同步 void | - | 恢复录音 |
+| `stop` | 同步 void | - | 停止录音 |
+| `release` | 同步 void | - | 释放录音器资源 |
+
+**start 参数（RecorderStartParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 否 | `""` | 录音数据输出 uri |
+
+**start 的 Promise reject**
+
+| code | message | 触发场景（当前 Rust 实现） |
+| ---- | ------- | -------- |
+| 400 | `params is none` | 未传参数对象 |
+| 400 | `start rejected` | 参数中无有效 `uri` |
+
+**事件**
+
+| 事件 | 回调签名 | 说明 |
+| ---- | ---- | ---- |
+| `onreaddata` | `(buffer: ArrayBuffer)` | 录音数据回调 |
+| `onerror` | `(data: string, code: number)` | 出错 |
+| `onstart` | `` | 开始录音 |
+| `onpause` | `` | 暂停 |
+| `onresume` | `` | 恢复 |
+| `onstop` | `` | 停止 |
+| `oninterrupt` | `(action: interruptAction)` | 音频中断事件 |
+
+**示例**
+
+```js
+const audio = require('system.media.audio')
+
+const recorder = audio.createAudioRecorder({ outputFormat: 'pcm' })
+
+recorder.onstart = function  { console.log('recorder start') }
+recorder.onpause = function  { console.log('recorder pause') }
+recorder.onresume = function  { console.log('recorder resume') }
+recorder.onstop = function  { console.log('recorder stop') }
+recorder.onreaddata = function (buffer) {
+  const view = new Int16Array(buffer)
+  console.log('recorder data, samples:', view.length)
+}
+recorder.onerror = function (data, code) {
+  console.log('recorder error', code, data)
+}
+recorder.oninterrupt = function (action) {
+  console.log('interrupt:', action.interruptHint, action.actionType)
+}
+
+// start 为 Promise 风格，需要 blueos.permission.RECORD 权限
+recorder.start({ uri: 'internal://cache/record.pcm' }).then(ret => {
+  console.log('start ok:', ret)
+}).catch(err => {
+  console.log('start fail', err.code, err.data)
+})
+
+recorder.pause
+recorder.resume
+recorder.stop
+recorder.release
+```
+
+## 数据结构
+
+### interruptAction
+
+`oninterrupt` 事件回调参数：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| interruptHint | number（int） | 中断提示类型 |
+| actionType | number（int） | 建议执行的动作类型 |
+
+### CreatePlayerParams / CreateTrackParams / CreateRecorderParams / PlayerSeekParams / TrackWriteParams / RecorderStartParams
+
+见上文各方法的参数表（字段名、类型、默认值均照抄 JIDL）。
+
+## 注意事项
+
+- **不稳定模块**：本模块在 `CONFIG_FEATURE_RUST_MODULES_UNSTABLE` 开关下构建，接口与行为可能变更。
+- **当前 Rust 实现为骨架/示例行为**（`system_media_audio_impl.rs`），方法体主要是日志打印并返回演示值，尚未接入真实音频 HAL：
+  - `createAudioPlayer`/`createAudioTrack`/`createAudioRecorder` 忽略传入参数（仅日志），始终成功返回实例；
+  - `AudioPlayer` 的 `src` 读取固定返回 `"http://www.baidu.com"`、`state` 固定返回 `"ready"`、`duration` 返回 `0.0`、`currentTime`/`playcount` 返回 `0`；`AudioTrack.state` 固定返回 `"playing"`；
+  - `play`/`pause`/`stop`/`release`/`resume` 等同步方法仅打印日志；
+  - `AudioTrack.write` 延时约 100ms 后固定 resolve `100`；
+  - `AudioRecorder.start` 延时约 100ms 后，带 `uri` 时 resolve 字符串 `"start resolved!"`，否则以 code 400 reject；
+  - 所有事件（`onplay`/`onerror`/`onreaddata`/`oninterrupt` 等）的 Native emit 函数已由 JIDL 生成，但当前实现**不会主动触发**。
+- **事件注册方式**：interface 事件以属性赋值形式注册（如 `player.onplay = fn`），回调签名照抄 JIDL。
+- **权限**：仅 `AudioRecorder.start` 标注需要 `blueos.permission.RECORD`，其余方法无权限要求。
+- **模块名区别**：模块名为 `system.media.audio`，导入时 `require('system.media.audio')`，与 `system.audio` 不是同一个模块。
+- 常量名 `STEAM_TYPE` 为 JIDL 原始拼写（STREAM_TYPE 的笔误），使用时以 JIDL 为准。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

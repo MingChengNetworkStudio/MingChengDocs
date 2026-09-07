@@ -1,0 +1,158 @@
+---
+title: Anim 动画
+description: LVGL 动画对象
+---
+
+## 构造
+
+```lua
+Anim(var: any, opts: table) -> anim
+obj:Anim(opts: table) -> anim       -- 语法糖
+```
+
+## opts 参数
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `start_value` | integer | 起始值 |
+| `end_value` | integer | 结束值 |
+| `time` / `duration` | integer | 动画时长（ms） |
+| `delay` | integer | 启动延迟（ms） |
+| `repeat_count` | integer | 重复次数，`-1` 为无限 |
+| `repeat_delay` | integer | 重复间延迟（ms） |
+| `early_apply` | integer/boolean | 立即应用首帧 |
+| `playback_time` | integer | 回放时长（往返动画） |
+| `playback_delay` | integer | 回放前延迟 |
+| `path` | string | 缓动：`"linear"` / `"ease_in"` / `"ease_out"` / `"ease_in_out"` / `"overshoot"` / `"bounce"` / `"step"` |
+| `exec_cb` | function | 执行回调 `function(obj, value)` |
+| `done_cb` | function | 完成回调 `function(anim, obj)` |
+| `run` | boolean | `true` 则立即启动 |
+
+## 实例方法
+
+| 方法 | 返回值 | 说明 |
+| --- | --- | --- |
+| `a:set(opts)` | anim | 更新参数 |
+| `a:start` | anim | 启动动画 |
+| `a:stop` | nil | 停止动画 |
+| `a:delete` | nil | 删除动画 |
+
+## 示例
+
+```lua
+local a = obj:Anim{
+  start_value = 0,
+  end_value   = 120,
+  duration    = 1000,
+  path        = "ease_out",
+  exec_cb     = function(o, v)
+    o:set({ x = v })
+  end,
+  run = true,
+}
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+> 以下内容来自洛汐文档库《LVGL 样式、事件与动画》：[docs.luoxe.cn/docs/vela/lua/lvgl-style-animation](https://docs.luoxe.cn/docs/vela/lua/lvgl-style-animation/)
+
+#### 控件动画 `object:anim`
+
+预装脚本使用以下形式：
+
+```lua
+image:anim {
+  property = "x",
+  from = -100,
+  to = 100,
+  duration = 800,
+  repeat_count = -1,
+  path = "linear",
+}
+```
+
+常见字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `property` | string | 要变化的属性，如 `x`、`y`、`opa`、`angle`、`zoom` |
+| `from` / `to` | number | 起始值与结束值 |
+| `duration` | integer | 单程时长，毫秒 |
+| `delay` | integer | 开始延迟，毫秒 |
+| `repeat_count` | integer | 重复次数；`-1` 表示无限 |
+| `repeat_delay` | integer | 每轮重复前延迟 |
+| `playback_duration` | integer | 回放时长 |
+| `playback_delay` | integer | 回放前延迟 |
+| `path` | string/function | 插值路径 |
+| `ready_cb` | function | 动画结束回调 |
+
+停止对象上的动画：
+
+```lua
+object:remove_all_anim
+```
+
+#### Anim 对象
+
+```lua
+lvgl.Anim(object, options) -> animation
+object:Anim(options) -> animation
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `start_value` | integer | 起始值 |
+| `end_value` | integer | 结束值 |
+| `time` / `duration` | integer | 动画时长，毫秒 |
+| `delay` | integer | 启动延迟，毫秒 |
+| `repeat_count` | integer | 重复次数；`-1` 为无限 |
+| `repeat_delay` | integer | 重复间延迟 |
+| `early_apply` | boolean/integer | 是否立即应用首帧 |
+| `playback_time` | integer | 反向回放时长 |
+| `playback_delay` | integer | 回放前延迟 |
+| `path` | string | `linear`、`ease_in`、`ease_out`、`ease_in_out`、`overshoot`、`bounce` 或 `step` |
+| `exec_cb` | function | `function(object, value)`，应用当前值 |
+| `done_cb` | function | `function(animation, object)`，完成回调 |
+| `run` | boolean | 创建后立即启动 |
+
+实例方法：
+
+| 方法 | 说明 |
+| --- | --- |
+| `animation:set(options)` | 更新参数 |
+| `animation:start` | 启动 |
+| `animation:stop` | 停止 |
+| `animation:delete` | 删除 |
+
+```lua
+local animation = object:Anim {
+  start_value = 0,
+  end_value = 120,
+  duration = 1000,
+  path = "ease_out",
+  exec_cb = function(target, value)
+    target:set { x = value }
+  end,
+  run = true,
+}
+```
+
+需要 JSON 状态动画时使用 [animengine](/docs/vela/LUA/capabilities/animengine)。
+
+#### 页面生命周期
+
+```lua
+function pageOnPause
+  object:remove_all_anim
+end
+
+function pageOnResume
+  -- 按当前状态重新建立动画
+end
+```
+
+无限动画会持续唤醒 UI 线程。页面隐藏后应停止，回到页面时重新创建。
+
+参考来源：官方 docs-lua / 洛汐文档库

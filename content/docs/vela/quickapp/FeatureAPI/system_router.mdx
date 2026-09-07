@@ -1,0 +1,398 @@
+---
+title: system.router 页面路由
+description: 快应用页面栈的跳转、替换、回退、清空及栈信息查询
+---
+
+> 提供快应用页面栈的跳转、替换、回退、清空及栈信息查询能力。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.router` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（官方文档：接口无需声明） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import router from '@system.router'
+// 本仓库运行时/测试中使用的写法
+const router = require('system.router')
+```
+
+## 功能概述
+
+`system.router` 维护快应用的页面栈，提供页面跳转（`push`）、替换（`replace`）、回退（`back`）、清空栈（`clear`）以及页面栈查询（`getLength`/`getState`/`getPages`）能力。
+
+Native 层通过 `quickapp.h` 的页面栈 API 实现：`QApplicationStackPagePush`/`QApplicationStackPageReplace`/`QApplicationStackPageBack`/`QApplicationClearStackPages`/`QApplicationGetStackPageLength`/`QApplicationEnumStackPages`。跳转参数（`params`）由 Native 序列化为页面路由信息（`QAppRouteInfo`：uri、querystring、extra_data JSON）传递给目标页面。
+
+本模块**全部为同步方法**：生成代码中方法均无 success/fail 回调、无 Promise，调用结果通过返回值直接给出；参数错误时通过引擎日志（`[FEATURE] ...`）报告，不抛 JS 异常。
+
+## API
+
+### router.push(params)
+
+压入新页面：跳转到应用内指定页面（或通过完整 URI 打开其他应用），当前页面保留在页面栈中。
+
+**参数（RouteObj 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 目标页面地址。应用内页面使用页面路径，如 `"/pages/detail"`；跨应用跳转使用完整 URI，格式为 `schema://<package>/<pagepath>?<querystring>`（见 Native `QAppRouteInfo.uri`）。uri 为空时引擎记录错误日志 `[FEATURE] router uri is null` |
+| params | object | 否 | 无 | 跳转携带的数据，键值对形式。值应使用简单类型（string/number/boolean 等可序列化值）；目标页面可直接通过 `this.<键名>` 读取。值格式不被支持时引擎记录 `[FEATURE] route param value format error` / `[FEATURE] page param format error:%s` 等日志 |
+
+**uri 的取值形式**（官方标准文档）：
+
+1. 包含 schema 的完整 uri；对于带 schema 的 uri，若 schema 是 hap（参见官方 hap 链接文档），会跳转到 hap 链接所支持的类型；
+2. 以 `/` 开头的应用内页面**路径**，例：`/about`；
+3. 以非 `/` 开头的应用内页面**名称**，例：`About`；
+4. 特殊地，uri 为 `"/"` 时跳转到 path 为 `"/"` 的页面，没有则跳转到首页。
+
+> 官方标准文档描述：`params` 中的参数可在目标页面通过 `this.param1` 的方式使用（param1 为键名），对应的值会**统一转换为 String 类型**；使用 `this.param1` 变量时，需要在目标页面的 `public`（应用外传参）或 `protected`（应用内传参）下定义同名属性。
+
+**params 保留字段**（官方标准文档）：
+
+| 键 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `___PARAM_LAUNCH_FLAG___` | string | 否 | JS 应用启动参数，目前仅支持 `"clearTask"`：启动目标页面时清除除此页面外的其他页面（详见官方"页面启动模式"文档） |
+
+> 官方标准文档描述了 `params.___PARAM_LAUNCH_FLAG___ = 'clearTask'` 启动标志；该字段未在 openvela 开源实证代码中出现，是否支持以实际引擎版本为准。
+
+**返回值**
+
+无（`undefined`）。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+// 应用内跳转（仓库示例：packages/fe/examples/weather）
+router.push({
+  uri: '/pages/detail'
+})
+
+// 携带参数跳转（仓库示例：packages/fe/examples/weather）
+router.push({
+  uri: '/pages/detail',
+  params: {
+    day: itemData.day,
+    tempHigh: itemData.tempHigh,
+    tempLow: itemData.tempLow,
+    icon: itemData.icon
+  }
+})
+
+// 通过完整 URI 打开其他应用（仓库示例：packages/apps/wearable/launcher）
+router.push({ uri: item.url })
+```
+
+官方示例——按页面**名称**跳转、以及跳转时清除其他页面：
+
+```js
+// 以非 '/' 开头的名称打开页面
+router.push({
+  uri: 'About',
+  params: { testId: '1' }
+})
+
+// 切换页面并清除其他页面（clearTask 启动标志）
+router.push({
+  uri: '/about',
+  params: { ___PARAM_LAUNCH_FLAG___: 'clearTask' }
+})
+```
+
+目标页面读取参数（仓库示例：24count 游戏页通过 `this.typeLevel` 读取 `params: { typeLevel }`）：
+
+```js
+// pages/game 页面脚本
+export default {
+  onInit {
+    console.log('收到难度参数：', this.typeLevel)
+  }
+}
+```
+
+### router.replace(params)
+
+替换当前页面：跳转到指定页面并关闭（销毁）当前页面（当前页面不保留在页面栈中）。参数格式与 `push` 完全相同。
+
+**参数（RouteObj 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 目标页面地址，同 `push` 的 uri（支持路径/名称/完整 uri） |
+| params | object | 否 | 无 | 跳转携带的数据，同 `push` 的 params |
+
+**返回值**
+
+无（`undefined`）。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+// 仓库示例：packages/apps/wearable/24count 首页替换为游戏页
+router.replace({
+  uri: '/pages/game',
+  params: {
+    typeLevel: type
+  }
+})
+
+// 仓库单元测试：frameworks/runtimes/quickapp/../../feature/tests/jidl/router_unit_test.js
+router.replace({
+  uri: '/test',
+  params: {
+    testId: '1'
+  }
+})
+```
+
+### router.back(params?)
+
+回退页面栈。不传参数时回退一页；传入 `path` 时回退到页面栈中指定路径的页面（对应 Native `QApplicationStackPageBack(app, back_path)`，`back_path` 为 `NULL` 时回退一页）。
+
+**参数（BackObj 对象字段，整个参数对象可选）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| path | string | 否 | 无 | 要回退到的目标页面路径，如 `"/A"`；不传则回退到上一页 |
+
+**path 取值与匹配规则**（官方标准文档）：
+
+- 不传该参数：返回上一页面；
+- 以 `/` 开头的、当前应用**已经打开**的页面路径，例：`/about`；
+- 特殊地，path 为 `"/"` 时跳转到页面路径为 `"/"` 的页，没有则跳转到首页；
+- path 必须是以 `/` 开头的当前应用已打开页面路径，否则视为无效参数，返回上一页面；
+- 根据 path 未匹配到已打开页面时，返回上一页面；
+- 根据 path 匹配到多个页面时，返回至最后打开（最靠近栈顶）的那个页面。
+
+**返回值**
+
+无（`undefined`）。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+// 回退一页
+router.back
+
+// 回退到栈中指定路径的页面
+// （仓库单元测试：router.back({ path: '/A' })）
+router.back({
+  path: '/A'
+})
+```
+
+官方示例——多级页面间按路径回退：
+
+```js
+// A 页面
+router.push({ uri: 'B' })
+// B 页面
+router.push({ uri: 'C' })
+// C 页面
+router.push({ uri: 'D' })
+// E 页面不传入路径，回退至 D
+router.back
+// D 页面不传入路径，回退至 C
+router.back
+// C 页面传入路径，回退至 A
+router.back({ path: '/A' })
+```
+
+### router.clear
+
+清空整个页面栈（对应 Native `QApplicationClearStackPages`）。
+
+**参数**
+
+无。
+
+**返回值**
+
+无（`undefined`）。
+
+> 官方标准文档描述：`clear` 为"清空所有历史页面记录，**仅保留当前页面**"。openvela 实证。：仓库单元测试在 `clear` 后断言 `router.getLength === 0`，即整个页面栈（含当前页记录）被清空。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+router.clear
+
+// 清空后栈长度为 0（仓库单元测试断言）
+console.log(router.getLength === 0) // true
+```
+
+### router.getLength
+
+获取当前页面栈中的页面数量（对应 Native `QApplicationGetStackPageLength`）。
+
+**参数**
+
+无。
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | number | 页面栈长度（整数）。空栈为 `0` |
+
+**示例**
+
+```js
+const router = require('system.router')
+
+var length = router.getLength
+console.log('当前页面栈长度：', length)
+```
+
+### router.getState
+
+获取当前页面（栈顶页面）的状态信息（对应 Native `QApplicationEnumStackPages`，该接口从栈顶页面开始枚举）。
+
+**参数**
+
+无。
+
+**返回值（RouteState 对象）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| index | number | 当前页面在页面栈中的索引（栈顶页面最先枚举，索引从 0 开始） |
+| name | string | 页面名称（Native `QAppPageInfo.name`） |
+| path | string | 页面路径（Native `QAppPageInfo.path`） |
+
+> 注：快应用联盟标准接口的 `getState` 在部分平台版本中还返回 `params`/`uri` 等字段；本引擎内置绑定的 RouteState 仅含 `index`/`name`/`path` 三个实证字段，标准快应用接口字段以实际引擎版本为准。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+var state = router.getState
+console.log('当前页面索引：', state.index)
+console.log('当前页面名称：', state.name)
+console.log('当前页面路径：', state.path)
+```
+
+### router.getPages
+
+获取页面栈中全部页面的信息列表（对应 Native `QApplicationEnumStackPages`，从栈顶页面开始枚举）。
+
+**参数**
+
+无。
+
+**返回值（RouteStack 数组）**
+
+`Array<RouteStack>`，每个元素结构：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| name | string | 页面名称（Native `QAppPageInfo.name`） |
+| path | string | 页面路径（Native `QAppPageInfo.path`） |
+
+> 注：`getPages` 为 OpenVela 引擎扩展方法，快应用联盟标准接口中无对应方法（标准仅提供 `getState`），以实际引擎版本为准。
+>
+> 官方标准文档示例将 `stacks[0]` 注释为"栈底页面"；openvela 实证枚举顺序为**从栈顶页面开始**，即数组第 0 项为栈顶页面，使用时以实际引擎返回顺序为准。
+
+**示例**
+
+```js
+const router = require('system.router')
+
+var pages = router.getPages
+pages.forEach(function (page, i) {
+  console.log(i, page.name, page.path)
+})
+
+// 官方示例写法
+var stacks = router.getPages
+console.log('页面名称：', stacks[0].name) // 如 list、detail 等
+console.log('页面路径：', stacks[0].path) // 如 /list、/detail、/home/preview
+```
+
+## 数据结构
+
+### RouteObj
+
+`push`/`replace` 的参数对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 目标页面地址：应用内页面路径（如 `"/pages/detail"`）、页面名称（如 `"About"`）或完整 URI（`schema://<package>/<pagepath>?<querystring>`） |
+| params | object | 传递给目标页面的参数键值对，目标页面通过 `this.<键名>` 读取 |
+
+### BackObj
+
+`back` 的可选参数对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| path | string | 要回退到的页面路径；省略时回退一页 |
+
+### RouteState
+
+`getState` 的返回对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| index | number | 页面在栈中的索引 |
+| name | string | 页面名称 |
+| path | string | 页面路径 |
+
+### RouteStack
+
+`getPages` 返回数组的元素对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| name | string | 页面名称 |
+| path | string | 页面路径 |
+
+## 注意事项
+
+- **全部方法均为同步调用**：内置 JIDL 生成代码中没有任何 success/fail/complete 回调或 Promise，直接使用返回值即可。
+- **没有 `router.close` 方法**：内置绑定的方法表仅含 `push`/`replace`/`back`/`clear`/`getLength`/`getState`/`getPages` 七个方法。预编译库中的 `closeEnter`/`closeExit` 字符串是 Native 页面转场动作名（`QAppPageAction` 的 `QAPP_PAGE_CLOSE_ENTER`/`QAPP_PAGE_CLOSE_EXIT`），并非 JS 接口。退出整个应用请使用 `system.app` 的 `terminate`。
+- **uri 不能为空**：`push`/`replace` 缺少 `uri` 时不会跳转，引擎输出错误日志 `[FEATURE] router uri is null`。
+- **uri 三种定位方式**：官方标准文档支持以 `/` 开头的页面路径、不以 `/` 开头的页面名称、以及带 schema 的完整 uri；uri 为 `"/"` 时跳转 path 为 `"/"` 的页面，没有则回退到首页。
+- **目标页面接收参数**：官方标准文档要求在目标页面 `public`（应用外传参）/ `protected`（应用内传参）中声明与 params 键同名的属性，才能通过 `this.<键名>` 读取；且官方描述参数值会统一转换为 String 类型。
+- **params 的值需可简单序列化**：Native 会把 params 转换为路由参数（querystring / JSON extra_data），值格式不支持时输出 `route not params`、`route param value format error`、`page param format error:%s` 等错误日志；建议只传 string/number/boolean 等简单值。
+- **back 的 path 必须指向已打开页面**：path 非法、未匹配到页面时均回退上一页；匹配到多个页面时回退到最后打开的那个。
+- **页面栈枚举顺序**：`getState`/`getPages` 底层 `QApplicationEnumStackPages` 从**栈顶页面**开始枚举。
+- **跨应用跳转**：uri 使用 `schema://<package>/<pagepath>?<querystring>` 完整格式时可拉起其他应用（参考启动器 `packages/apps/wearable/launcher` 中 `router.push({ uri: item.url })` 的用法）；是否允许跳转受系统应用管理策略控制。
+- 该 Feature 由引擎构建配置 `CONFIG_FEATURE_SYSTEM_ROUTER` 编入预编译库 libquickappfeatures，应用侧无需在 manifest 中额外声明权限。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

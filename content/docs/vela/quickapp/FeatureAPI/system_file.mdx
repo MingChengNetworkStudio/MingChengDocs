@@ -1,0 +1,672 @@
+---
+title: "system.file 文件操作"
+---
+
+> 提供快应用沙箱内的文件与目录操作能力：文本/二进制读写、复制、移动、删除、目录创建/删除、文件列表与信息查询。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.file` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.file" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import file from '@system.file'
+// 或
+const file = require('@system.file')
+// 本仓库运行时/测试中使用的写法
+const file = require('system.file')
+```
+
+## 功能概述
+
+`system.file` 为应用提供沙箱内部存储上的文件操作能力，包括文本文件的读写（`writeText`/`readText`）、二进制数据的读写（`writeArrayBuffer`/`readArrayBuffer`，使用 Uint8Array）、文件的复制/移动/删除（`copy`/`move`/`delete`）、目录的创建与删除（`mkdir`/`rmdir`）、目录列举（`list`）以及文件/目录信息查询（`get`/`access`）。
+
+接口中使用的 URI 为应用沙箱路径（`internal://` 开头），URI 组织规则详见本文[注意事项](#注意事项)中的 URI scheme 说明（对应官方文档"文件组织"章节）；`list`/`get` 返回的文件 URI 可以被其他组件或 Feature 访问。
+
+所有方法均为**回调风格的异步方法**（参数对象中带 `success`/`fail`/`complete`），没有 Promise 风格定义。底层基于 libuv 实现：`move`/`copy`/`access`/`delete` 使用 `uv_fs_rename`/`uv_fs_copyfile`/`uv_fs_access`/`uv_fs_unlink` 在事件循环上异步执行；读写、`mkdir`/`rmdir`/`list`/`get` 通过 `uv_queue_work` 投递到 libuv 线程池执行，避免阻塞 JS 线程。文件路径通过 `app_path.cpp` 在 `internal://` URI 与物理路径之间转换，并按包名隔离。
+
+## API
+
+### file.move(params)
+
+将源文件移动（重命名）到目标路径。底层调用 `uv_fs_rename`；成功后 `success` 回调返回目标文件的 URI。
+
+> 官方标准文档说明：源文件/目标文件的 URI 不能是应用资源路径（包内只读资源）和 tmp 类型的 URI。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| srcUri | string | 是 | 无 | 源文件 URI，须为 `internal://` 开头的沙箱路径 |
+| dstUri | string | 是 | 无 | 目标文件 URI，须为 `internal://` 开头的沙箱路径 |
+| success | function | 否 | 无 | 成功回调，参数为目标 URI（`string`） |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调（成功失败均调用） |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| （回调参数本身） | string | 移动后文件的目标 URI，如 `internal://files/move_demo.txt` |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（路径不存在）、202（参数/路径非法，如 URI 为空、不含 `internal://` 前缀、目标在 tmp 目录）、300（其他 IO 错误）；事件循环异常时为 200。错误信息为参数校验的英文提示或 libuv 的 `uv_strerror` 文本。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.move({
+  srcUri: 'internal://files/demo.txt',
+  dstUri: 'internal://files/move_demo.txt',
+  success: function (uri) {
+    console.log('move success, new uri:', uri)
+  },
+  fail: function (msg, code) {
+    console.log('move fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.copy(params)
+
+将源文件复制到目标路径。底层调用 `uv_fs_copyfile`（flags=0）；成功后 `success` 回调返回目标文件的 URI。
+
+> 官方标准文档说明：目标文件 URI 不能是应用资源路径和 tmp 类型的 URI。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| srcUri | string | 是 | 无 | 源文件 URI，须为 `internal://` 开头的沙箱路径（**不允许**使用 tmp 目录路径） |
+| dstUri | string | 是 | 无 | 目标文件 URI，须为 `internal://` 开头的沙箱路径（**不允许**使用 tmp 目录路径） |
+| success | function | 否 | 无 | 成功回调，参数为目标 URI（`string`） |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| （回调参数本身） | string | 复制后文件的目标 URI |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（路径不存在）、202（参数/路径非法，含源/目标在 tmp 目录）、300（其他 IO 错误）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.copy({
+  srcUri: 'internal://files/demo.txt',
+  dstUri: 'internal://files/copy_demo.txt',
+  success: function (uri) {
+    console.log('copy success, new uri:', uri)
+  },
+  fail: function (msg, code) {
+    console.log('copy fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.list(params)
+
+列举指定目录下的**文件**（不包含子目录），返回每个文件的 URI、大小与最后修改时间。返回的文件 URI 可以被其他组件或 Feature 访问。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 目录 URI，如 `internal://files/` |
+| success | function | 否 | 无 | 成功回调，参数为含 `fileList` 数组的对象 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| fileList | Array&lt;file_info_t&gt; | 目录下所有文件（不含子目录）的信息数组，结构见[数据结构](#数据结构)。每个元素形如 `{uri:'file1', lastModifiedTime:1234456, length:123456}` |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（目录不存在）、202（URI 为空或非法）、300（其他 IO 错误，如目标不是目录）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.list({
+  uri: 'internal://files/',
+  success: function (data) {
+    data.fileList.forEach(function (info) {
+      console.log(info.uri, info.length, 'bytes,', info.lastModifiedTime)
+    })
+  },
+  fail: function (msg, code) {
+    console.log('list fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.get(params)
+
+获取单个文件或目录的详细信息，包括类型（`file`/`dir`）、大小、最后修改时间；对目录可通过 `recursive` 递归返回其下所有内容。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 文件或目录 URI |
+| recursive | boolean | 否 | `false` | 目标为目录时是否递归列举子内容；`false` 时 `subFiles` 为空数组 |
+| success | function | 否 | 无 | 成功回调，参数为 `extended_file_info_t` 对象 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+成功回调收到一个 `extended_file_info_t` 对象（结构见[数据结构](#数据结构)）：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 文件/目录的 URI，该 URI 可以被其他组件或 Feature 访问 |
+| length | number | 文件大小（字节，单位 B）；目录固定为 0 |
+| lastModifiedTime | number | 最后修改时间，**毫秒级**时间戳（底层秒级时间 × 1000） |
+| type | string | `"file"`（文件）或 `"dir"`（目录） |
+| subFiles | Array&lt;extended_file_info_t&gt; | 目录的子项列表；`recursive=false` 时为空数组，`true` 时递归包含文件与子目录 |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（路径不存在）、202（URI 为空或非法）、300（其他 IO 错误）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+// 获取单个文件信息
+file.get({
+  uri: 'internal://files/demo.txt',
+  success: function (info) {
+    console.log(info.type, info.length, info.lastModifiedTime)
+  },
+  fail: function (msg, code) {
+    console.log('get fail', code, msg)
+  }
+})
+
+// 递归获取目录信息
+file.get({
+  uri: 'internal://files/',
+  recursive: true,
+  success: function (info) {
+    console.log(JSON.stringify(info))
+  },
+  fail: function (msg, code) {
+    console.log('get dir fail', code, msg)
+  }
+})
+```
+
+### file.delete(params)
+
+删除指定的**文件**（底层 `uv_fs_unlink`）。删除目录请使用 `rmdir`。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 待删除文件 URI（不允许使用 tmp 目录路径） |
+| success | function | 否 | 无 | 成功回调，无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（文件不存在）、202（URI 为空、非法或位于 tmp 目录）、300（其他 IO 错误，如目标是目录）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.delete({
+  uri: 'internal://files/move_demo.txt',
+  success: function  {
+    console.log('delete success')
+  },
+  fail: function (msg, code) {
+    console.log('delete fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.writeText(params)
+
+将字符串写入文本文件。`append=false`（默认）为覆盖写（底层 `O_TRUNC`），`append=true` 为追加写（`O_APPEND`）；文件不存在时自动创建，父目录不存在时自动递归创建。
+
+> **官方使用建议**：使用文件写入接口时，请务必注意及时清理无用的文件；特别是在 IoT 设备内存较小的情况下，可以避免内存过载和应用崩溃的问题。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 目标文件 URI（不支持资源文件路径和 tmp 分区；不允许使用 tmp 目录路径） |
+| text | string | 是 | 无 | 待写入的文本内容 |
+| encoding | string | 否 | `"UTF-8"` | 文本编码（JIDL 默认值；当前 Native 实现未实际使用该参数，文本按原始字节写入） |
+| append | boolean | 否 | `false` | 是否追加写入 |
+| success | function | 否 | 无 | 成功回调，无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：202（URI 非法/位于 tmp、`text` 为空，错误信息如 `"invalid file path"`、`"invalid text"`）、300（IO 错误，如磁盘空间不足）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+// 覆盖写
+file.writeText({
+  uri: 'internal://files/demo.txt',
+  text: 'write by file.writeText. ',
+  success: function  {
+    console.log('writeText success')
+  },
+  fail: function (msg, code) {
+    console.log('writeText fail', code, msg)
+  }
+})
+
+// 追加写
+file.writeText({
+  uri: 'internal://files/demo.txt',
+  text: 'append line.\n',
+  encoding: 'UTF-8',
+  append: true,
+  success: function  {},
+  fail: function (msg, code) {
+    console.log('append fail', code, msg)
+  }
+})
+```
+
+### file.writeArrayBuffer(params)
+
+将二进制数据（ArrayBuffer/TypedArray，推荐 Uint8Array）写入文件。非追加模式下可通过 `position` 指定写入偏移；追加模式下忽略 `position`，直接在文件末尾追加。文件不存在时自动创建。
+
+> **官方使用建议**：同 `writeText`，写入后请及时清理无用文件，避免 IoT 设备存储空间过载。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 目标文件 URI（不支持资源文件路径和 tmp 分区；不允许使用 tmp 目录路径） |
+| buffer | object（Uint8Array） | 是 | 无 | 待写入数据，JIDL 注释为 uint8Array；接受 ArrayBuffer/TypedArray |
+| position | number(int) | 否 | `0` | 指向文件开始写入数据的位置的偏移量（字节），仅非追加模式生效；非追加模式下不可为负 |
+| append | boolean | 否 | `false` | 是否追加写入；为 `true` 时忽略 `position`，position 参数无效 |
+| success | function | 否 | 无 | 成功回调，无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：202（URI 非法/位于 tmp、`buffer` 不是 ArrayBuffer/TypedArray、非追加模式下 `position < 0`，错误信息如 `"invalid file path"`、`"invalid array buffer"`、`"invalid array buffer type"`）、300（IO 错误，如磁盘空间不足）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+const str = 'write by file.writeArrayBuffer.'
+const buffer = new Uint8Array(str.length)
+for (let i = 0; i < str.length; i++) {
+  buffer[i] = str.charCodeAt(i)
+}
+
+file.writeArrayBuffer({
+  uri: 'internal://files/demo.bin',
+  buffer: buffer,
+  position: 0,
+  append: false,
+  success: function  {
+    console.log('writeArrayBuffer success')
+  },
+  fail: function (msg, code) {
+    console.log('writeArrayBuffer fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.readText(params)
+
+读取整个文本文件，内容以字符串形式返回。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 文件 URI；`internal://` 开头为沙箱文件，以 `/` 开头时读取应用包内只读资源（如 `'/Common/demo.txt'`，见注意事项） |
+| encoding | string | 否 | `"UTF-8"` | 文本编码（JIDL 默认值；当前 Native 实现未实际使用该参数，按原始字节读回为字符串） |
+| success | function | 否 | 无 | 成功回调，参数为含 `text` 字段的对象 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 读取到的文件全文 |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（文件不存在）、202（URI 为空或非法）、300（其他 IO 错误）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.readText({
+  uri: 'internal://files/demo.txt',
+  success: function (data) {
+    console.log('text =', data.text)
+  },
+  fail: function (msg, code) {
+    console.log('readText fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.readArrayBuffer(params)
+
+从文件指定位置读取二进制数据，返回 Uint8Array。`length` 缺省时读取从 `position` 到文件末尾的全部内容。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 文件 URI；`internal://` 开头为沙箱文件，以 `/` 开头时读取应用包内只读资源（如 `'/Common/demo.txt'`，见注意事项） |
+| position | number(int) | 否 | `0` | 读取起始偏移（字节），须 ≥ 0；默认值为文件的起始位置 |
+| length | number(int) | 否 | `-2147483648`（INT32_MIN） | 读取字节数；不填写则读取到文件结尾，默认值表示读取从 `position` 到文件末尾的全部内容。须 ≥ 0 或保持默认值 |
+| success | function | 否 | 无 | 成功回调，参数为含 `buffer` 字段的对象 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| buffer | object（Uint8Array） | 读取到的二进制数据（读取的文件内容），可通过 `data.buffer.length` 获取实际长度 |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（文件不存在）、202（URI 非法，或 `position < 0`、`length` 既非负值默认值又小于 0 等参数错误，底层映射 EINVAL）、300（其他 IO 错误）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+// 读取前 10 个字节
+file.readArrayBuffer({
+  uri: 'internal://files/demo.bin',
+  position: 0,
+  length: 10,
+  success: function (data) {
+    console.log('got', data.buffer.length, 'bytes')
+  },
+  fail: function (msg, code) {
+    console.log('readArrayBuffer fail', code, msg)
+  }
+})
+
+// 读取整个文件
+file.readArrayBuffer({
+  uri: 'internal://files/demo.bin',
+  success: function (data) {
+    console.log('whole file:', data.buffer)
+  },
+  fail: function (msg, code) {
+    console.log('readArrayBuffer fail', code, msg)
+  }
+})
+```
+
+### file.access(params)
+
+检查文件或目录是否存在（底层以 `F_OK` 调用 `uv_fs_access`）。存在即触发 `success`，不存在触发 `fail`。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 待检查的文件/目录 URI（不允许使用 tmp 目录路径） |
+| success | function | 否 | 无 | 成功回调（路径存在），无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)`（路径不存在时 code 为 301） |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（路径不存在）、202（URI 为空、非法或位于 tmp 目录）、300（其他 IO 错误）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.access({
+  uri: 'internal://files/demo.txt',
+  success: function  {
+    console.log('file exists')
+  },
+  fail: function (msg, code) {
+    console.log('access fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.mkdir(params)
+
+创建目录。`recursive=false`（默认）时仅创建最后一级目录，父目录不存在则失败；`recursive=true` 时递归创建所有不存在的父目录（先递归创建该目录的上级目录后再创建该目录）。Feature 初始化时已自动创建应用的 cache/files/mass/tmp 根目录。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 待创建目录 URI（不能是应用资源路径和 tmp 类型的 URI；不允许使用 tmp 目录路径） |
+| recursive | boolean | 否 | `false` | 是否递归创建父目录 |
+| success | function | 否 | 无 | 成功回调，无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。目录已存在时视为成功。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：202（URI 为空、非法或位于 tmp 目录，错误信息为 `"invalid path"`）、300（IO 错误，如非递归模式下父目录不存在）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+// 递归创建多级目录
+file.mkdir({
+  uri: 'internal://files/a/b/c',
+  recursive: true,
+  success: function  {
+    console.log('mkdir success')
+  },
+  fail: function (msg, code) {
+    console.log('mkdir fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+### file.rmdir(params)
+
+删除目录。`recursive=false`（默认）时只能删除**空目录**，目录非空会失败；`recursive=true` 时先递归删除目录内全部子文件和子目录再删除目录本身。删除文件请使用 `delete`。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| uri | string | 是 | 无 | 待删除目录 URI（不能是应用资源路径和 tmp 类型的 URI；不允许使用 tmp 目录路径） |
+| recursive | boolean | 否 | `false` | 是否递归删除目录内容 |
+| success | function | 否 | 无 | 成功回调，无参数 |
+| fail | function | 否 | 无 | 失败回调 `(msg: string, code: number)` |
+| complete | function | 否 | 无 | 完成回调 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误码：301（目录不存在）、202（URI 为空、非法或位于 tmp 目录，错误信息为 `"invalid path"`）、300（IO 错误，如非递归模式下目录非空）；事件循环异常时为 200。
+
+**示例**
+
+```js
+const file = require('system.file')
+
+file.rmdir({
+  uri: 'internal://files/newdir',
+  recursive: true,
+  success: function  {
+    console.log('rmdir success')
+  },
+  fail: function (msg, code) {
+    console.log('rmdir fail', code, msg)
+  },
+  complete: function  {}
+})
+```
+
+## 数据结构
+
+### file_info_t
+
+`list` 成功回调中 `fileList` 数组的元素类型。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 文件的 `internal://` URI，该 URI 可以被其他组件或 Feature 访问 |
+| length | number(int) | 文件大小（字节，单位 B） |
+| lastModifiedTime | number(long) | 最后修改时间，毫秒级时间戳（从 1970/01/01 00:00:00 GMT 到当前时间的毫秒数） |
+
+### extended_file_info_t
+
+`get` 成功回调返回的文件/目录信息。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 文件/目录的 `internal://` URI |
+| length | number(int) | 文件大小（字节，单位 B）；目录为 0 |
+| lastModifiedTime | number(long) | 最后修改时间，毫秒级时间戳 |
+| type | string | 类型：`"file"`（文件）或 `"dir"`（目录） |
+| subFiles | Array&lt;extended_file_info_t&gt; | 子项数组；仅目录且 `recursive=true` 时递归填充，否则为空数组 |
+
+## 注意事项
+
+- **URI scheme（以 Native 实现为准）**：所有路径必须以 `internal://` 开头，形如 `internal://<类型>/<相对路径>`；不含该前缀的 URI 会直接返回 202（`"invalid file path"` / `"invalid path"`）。实现（`app_path.cpp`）识别的类型为 `cache`、`file`（按前缀匹配，因此快应用惯例的 **`files`** 写法同样被接受）、`mass`、`tmp`，物理映射如下（根目录默认为 `/data/quickapp`，若配置了 `CONFIG_HAP_APP_PATH` 则以配置为准）：
+  - `internal://files/<路径>` → `<根目录>/files/<包名>/<路径>`：应用私有文件目录；
+  - `internal://cache/<路径>` → `<根目录>/cache/<包名>/<路径>`：缓存目录；
+  - `internal://mass/<路径>` → `<根目录>/mass/<包名>/<路径>`：大容量存储目录；
+  - `internal://tmp/<路径>` → `<根目录>/tmp/<路径>`：临时目录（全局共享，路径中**不含包名**）。
+- **tmp 目录限制**：`internal://tmp/...` 不能作为 `copy` 的源、`move`/`copy` 的目标，也不能用于 `access`/`delete`/`writeText`/`writeArrayBuffer`/`mkdir`/`rmdir`（违反返回 202）；读取类接口（`readText`/`readArrayBuffer`）与 `list`/`get` 不做此限制。
+- **包内只读资源**：`readText`/`readArrayBuffer` 的 `uri` 若以 `/` 开头（如 `/common/logo.png`、官方示例 `'/Common/demo.txt'`），会映射到应用安装目录下的包内资源（启用 `CONFIG_QUICKAPP` 时为 `<CONFIG_HAP_APP_PATH>/app/<包名><uri>`，否则为 `data/app/<包名><uri>`），用于读取 HAP 包内随包发布的只读文件。写、移动、复制、删除、建目录等操作均不支持应用资源路径。
+- **目录自动创建**：Feature 实例创建时会自动确保应用的 `cache`/`files`/`mass`/`tmp` 根目录及公共 `system/common` 目录存在；写文件时若父目录不存在也会自动递归创建。
+- **磁盘空间保护**：启用 `CONFIG_QUICKAPP_DISK_RESERVED` 后，写操作前会通过 `statfs` 检查 `/data` 剩余空间，低于预留阈值时写操作失败（ENOSPC，错误码 300）。
+- **及时清理文件**：IoT 设备存储空间通常较小，写入文件后应及时清理不再使用的文件，避免存储空间耗尽导致应用异常。
+- **时间戳单位**：`lastModifiedTime` 为毫秒级时间戳（底层 `stat` 的秒级修改时间 × 1000）。
+- **`list` 与 `get` 的区别**：`list` 只返回目录下的**文件**（不含子目录），元素为 `file_info_t`；`get` 返回单个目标的详情，目录在 `recursive=true` 时通过 `subFiles` 递归包含文件和子目录，元素为 `extended_file_info_t`。
+- **`delete` 与 `rmdir` 的区别**：`delete` 底层是 `unlink`，只能删文件；`rmdir` 用于删目录，非递归模式仅能删除空目录。
+- **encoding 参数**：`readText`/`writeText` 的 `encoding` 在 JIDL 中默认为 `"UTF-8"`，但当前 Native 实现未实际使用该参数，文本按原始字节读写，具体行为以 Native 实现为准。
+- **错误码**：fail 回调签名统一为 `(msg: string, code: number)`，code 取值：200（通用错误，如事件循环异常）、202（参数错误）、300（IO 错误）、301（路径不存在）；`msg` 为参数校验的英文提示（如 `"invalid file path"`、`"invalid text"`、`"invalid array buffer type"`）或 libuv 的错误描述字符串。
+
+> 官方标准文档描述：各方法 fail 错误码仅列出 202（参数错误）与 300（I/O 错误），其中 `readText`/`readArrayBuffer` 另列出 301（文件不存在）。openvela 实证实现中，路径不存在场景在各方法上统一返回 301，事件循环异常返回 200。
+
+- 全部方法均为回调风格异步 API，JIDL 未定义 Promise 形式；文件 IO 在 libuv 线程/事件循环中执行，不阻塞 JS 线程。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

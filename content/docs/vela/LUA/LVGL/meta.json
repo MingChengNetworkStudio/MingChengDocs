@@ -1,0 +1,4 @@
+{
+  "title": "LVGL",
+  "pages": ["overview", "widgets", "modules", "enums", "globals"]
+}

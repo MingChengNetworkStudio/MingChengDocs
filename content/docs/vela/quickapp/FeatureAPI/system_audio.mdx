@@ -1,0 +1,313 @@
+---
+title: "system.audio 音频播放"
+---
+
+> 提供本地/网络音频文件的播放、暂停、停止、进度控制、循环/音量设置，并通过事件回调通知播放状态变化。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.audio` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.audio" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import audio from '@system.audio'
+// 或
+const audio = require('@system.audio')
+// 本仓库运行时/测试中使用的写法
+const audio = require('system.audio')
+```
+
+## 功能概述
+
+`system.audio` 是一个单例音频播放器对象：设置 `src` 后调用 `play` 即可播放，播放进度、时长、音量等通过 property 读取，播放状态通过 `onplay`/`onpause`/`onended` 等事件回调通知。
+
+Native 层基于 multimedia 框架的 `media_uv_player_*` 异步接口（libuv 事件循环）与 media server 通信，音频流类型固定为 `Music`（音乐流）。Feature 创建时还会通过 `media_uv_session_register` 注册为**媒体会话被控端（controllee）**：播放状态、时长、进度、音量以及 `meta` 元信息会同步给媒体会话服务，同时接收系统/蓝牙等控制器发来的播放控制（上一首/下一首通过 `onctrlplayprev`/`onctrlplaynext` 通知 JS）。
+
+典型使用场景：音乐播放器、音效播放、可穿戴设备上的本地音频播放（可参考 `openvela/packages/apps/wearable/player/`）。
+
+## API
+
+### audio.play
+
+开始（或恢复）播放音频。无参数、无返回值，结果通过事件回调通知。
+
+- 若当前尚未加载音源（未 prepare），会先使用 `src` 调用底层 `prepare`，prepare 成功后再 `start`；若在播放前设置过 `currentTime`，prepare 完成后会先 seek 到该位置再播放。
+- 若处于暂停状态，调用 `play` 为继续播放。
+- `src` 为空、prepare/start 失败时触发 `onerror` 事件。
+
+**示例**
+
+```js
+const audio = require('system.audio')
+
+audio.src = 'internal://files/music/demo.mp3'
+audio.play
+```
+
+### audio.pause
+
+暂停播放音频。无参数、无返回值。
+
+- 仅在播放中（started 状态）有效；非播放状态下调用为空操作（Native 打印 warning，不触发错误）。
+- 暂停成功后触发 `onpause` 事件。
+
+**示例**
+
+```js
+const audio = require('system.audio')
+
+audio.pause
+```
+
+### audio.stop
+
+停止音频播放，停止后可以通过 `play` 重新播放。无参数、无返回值。
+
+- 停止后 Native 会复位内部状态：清空 `src`、`currentTime` 归零、`duration` 复位为 -1、`autoplay`/`loop` 复位为 false。
+- 停止成功后触发 `onstop` 事件。
+- 已处于停止状态时调用，仅做状态复位，不重复停止。
+- 切换歌曲时应先 `stop` 再设置新的 `src`（prepare 之后不允许再设置 `src`）。
+
+**示例**
+
+```js
+const audio = require('system.audio')
+
+// 切歌：先停止，再换 src，再播放
+audio.stop
+audio.src = 'internal://files/music/next.mp3'
+audio.play
+```
+
+### audio.getPlayState(params)
+
+获取当前播放状态数据。回调风格，无 Promise 形式。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 回调签名 `success(state: AudioState)`，参数见 [AudioState](#audiostate) |
+| fail | function | 否 | - | 回调签名 `fail(data: string, code: number)`；当前 Native 实现总是返回成功，不会回调 fail |
+| complete | function | 否 | - | 回调签名 `complete`，无论成功失败都会调用 |
+
+**成功返回 / success 回调参数**
+
+`AudioState` 对象，字段见[数据结构](#audiostate)一节。其中 `state` 为字符串：`"play"`（播放中）、`"pause"`（已暂停）、`"stop"`（其他状态，含停止/未播放）。
+
+> 官方标准文档描述：`src` 为当前播放的音频媒体 uri，停止时返回空字符串；`currentTime` 停止时返回 -1；`duration` 未知时返回 NaN；`volume` 默认为当前系统媒体音量，范围 [0.0, 1.0]。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(data: string, code: number)`
+- 当前实现中 `getPlayState` 始终同步回调 success，fail 不会被触发（具体行为以 Native 实现为准）。
+
+**示例**
+
+```js
+const audio = require('system.audio')
+
+audio.getPlayState({
+  success: function (state) {
+    console.log('state:', state.state)
+    console.log('src:', state.src)
+    console.log('currentTime:', state.currentTime)
+    console.log('duration:', state.duration)
+    console.log('percent:', state.percent)
+    console.log('volume:', state.volume)
+    console.log('muted:', state.muted)
+    console.log('loop:', state.loop)
+    console.log('autoplay:', state.autoplay)
+  },
+  fail: function (data, code) {
+    console.log('getPlayState fail', code, data)
+  },
+  complete: function  {
+    console.log('getPlayState complete')
+  }
+})
+```
+
+## 属性（property）
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `src` | string | 读写 | 播放的音频媒体 uri（必填）。长度上限 1024 字节。支持三种形式：① `internal://<type>/<path>`，`<type>` 仅允许 `cache`/`file`/`mass`/`tmp`/`files`；② 以 `/` 开头的应用内绝对路径；③ 其他字符串原样使用（如 `http://` 网络地址）。**必须在 prepare 之前设置**（首次 `play` 之后再设置会被 Native 拒绝并打印 warning）；切歌请先 `stop`。 |
+| `meta` | MetaInfo | 只写（writeonly） | 音频元数据信息 `{ title, album, artist }`（歌名、歌手、专辑名），每个字段最长 64 字节；在音源 prepare 完成后会随会话信息上报给媒体会话服务（用于锁屏/蓝牙等界面显示）。 |
+| `currentTime` | number(float) | 读写 | 音频的当前进度，单位**秒**；对该属性赋值可以调整播放进度（seek，Native 换算为毫秒）；在首次播放前写入，会在 prepare 完成后自动 seek 到该位置。 |
+| `duration` | number(float) | 只读（readonly） | 音频的播放时长，单位秒；音源信息未获取到时为 `-1`。 |
+| `autoplay` | boolean | 读写 | 音频是否自动播放，默认 false。当前 Native 实现仅保存/上报该标记，**不会据此自动开始播放**，播放仍需显式调用 `play`（具体行为以 Native 实现为准）。 |
+| `loop` | boolean | 读写 | 音频是否循环播放，默认 false。写入时同步调用底层 looping 设置：`true` 对应无限循环（-1），`false` 为不循环（0）。 |
+| `volume` | number(double) | 读写 | 音频的音量，默认为当前系统媒体音量，范围 0.0~1.0，超出范围会被钳制（`<0` 按 0、`>1` 按 1）。内部换算为 0~10 的整数音量档，通过音频策略（media policy）设置 `Music` 流音量。Feature 创建时会用系统当前音乐流音量初始化该值。 |
+| `muted` | boolean | 读写 | 音频是否静音，默认 false。置 `true` 时保存当前音量并把音量设为 0；置 `false` 时恢复静音前保存的音量。读取值等价于 `volume === 0`。 |
+| `streamType` | string | 只读（readonly） | 流类型，当前实现固定返回 `"music"`。 |
+| `percent` | number(float) | 只读（readonly） | 播放进度百分比，0~100，播放过程中每秒刷新一次。 |
+
+> 官方标准文档描述：`streamType` 可能的值有 `music`、`voicecall`，值为 `music` 时使用扬声器播放，`voicecall` 时使用听筒播放（手表、手环设备不支持此配置），默认为 `music`。
+
+**属性读写示例**
+
+```js
+const audio = require('system.audio')
+
+audio.src = 'internal://files/music/demo.mp3'
+audio.meta = { title: '歌曲名', album: '专辑名', artist: '歌手' }
+audio.loop = true
+audio.volume = 0.5      // 范围 0.0 ~ 1.0
+audio.muted = false
+
+audio.play
+
+// 也可以通过给 currentTime 赋值来调整播放进度（单位：秒）
+// audio.currentTime = 5
+
+setTimeout(function  {
+  console.log('currentTime:', audio.currentTime)
+  console.log('duration:', audio.duration)
+  console.log('percent:', audio.percent)
+  console.log('streamType:', audio.streamType)
+}, 2000)
+```
+
+## 事件
+
+以下事件均为**只写回调属性**（JIDL 中 `property on_event onXxx writeonly`），赋值为无参函数即可监听；回调本身不带参数，需要状态数据时在回调中读取上面的 property 或调用 `getPlayState`。赋为 `null` 可取消监听。
+
+| 事件属性 | 触发时机 |
+| ---- | ---- |
+| `onplay` | 播放开始/恢复（底层 `MEDIA_EVENT_STARTED`）。触发后内部启动 1 秒周期的进度定时器。官方标准中的被动触发场景：蓝牙耳机控制播放音频。 |
+| `onpause` | 播放暂停（`MEDIA_EVENT_PAUSED`）。官方标准中的被动触发场景：① 音频焦点被抢占，例如播放音频时收到来电；② 蓝牙耳机控制暂停音频。 |
+| `onstop` | 播放停止（`MEDIA_EVENT_STOPPED`）。官方标准中的被动触发场景：正在打电话时播放音频（被系统打断停止）。 |
+| `onloadeddata` | 第一次获取到音频数据、音源 prepare 完成（`MEDIA_EVENT_PREPARED`）。 |
+| `onended` | 自然播放结束（`MEDIA_EVENT_COMPLETED`）；注意 `loop = true` 循环播放时不会触发。 |
+| `ondurationchange` | 播放时长获取完成/变化时触发（播放开始后主动查询一次 duration，查询回来后触发）。 |
+| `ontimeupdate` | 播放进度更新，播放中**每 1 秒**触发一次；触发时 `currentTime`/`duration`/`percent`/`volume` 已刷新。 |
+| `onerror` | 播放发生错误：播放器打开失败、prepare/start 失败、底层事件返回错误、媒体会话更新失败等。回调无参数、无错误码。 |
+| `onctrlplayprev` | 收到媒体会话控制器发来的"上一首"控制命令（`MEDIA_EVENT_PREV_SONG`，如蓝牙/手表控件）。 |
+| `onctrlplaynext` | 收到媒体会话控制器发来的"下一首"控制命令（`MEDIA_EVENT_NEXT_SONG`）。 |
+
+> 说明：
+> - 媒体会话控制器发来的播放/暂停/停止命令由 Native 自动执行；上一首/下一首命令通过 `onctrlplayprev`/`onctrlplaynext` 交给 JS 处理（应用在回调里切换 `src`）。
+> - `ontimeupdate`、`onctrlplayprev`、`onctrlplaynext` 为 openvela 实证 JIDL 提供的事件，官方标准文档事件表中未列出。
+
+**示例**
+
+```js
+const audio = require('system.audio')
+
+audio.onplay = function  {
+  console.log('onplay')
+}
+audio.onpause = function  {
+  console.log('onpause')
+}
+audio.onstop = function  {
+  console.log('onstop')
+}
+audio.onloadeddata = function  {
+  console.log('onloadeddata, duration =', audio.duration)
+}
+audio.onended = function  {
+  console.log('onended, play next song')
+}
+audio.ondurationchange = function  {
+  console.log('ondurationchange, duration =', audio.duration)
+}
+audio.ontimeupdate = function  {
+  console.log('ontimeupdate, percent =', audio.percent)
+}
+audio.onerror = function  {
+  console.log('onerror')
+}
+audio.onctrlplayprev = function  {
+  console.log('controller: prev song')
+}
+audio.onctrlplaynext = function  {
+  console.log('controller: next song')
+}
+
+audio.src = 'internal://files/music/demo.mp3'
+audio.play
+
+// 取消监听示例：
+// audio.onplay = null
+```
+
+## 数据结构
+
+### AudioState
+
+`getPlayState` 的 success 回调参数：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `state` | string | 播放状态：`"play"` / `"pause"` / `"stop"` |
+| `src` | string | 当前音源地址（内部转换后的实际路径） |
+| `currentTime` | number(float) | 当前播放位置，单位秒 |
+| `autoplay` | boolean | 自动播放标记 |
+| `loop` | boolean | 是否循环播放 |
+| `volume` | number(double) | 当前音量，0.0~1.0 |
+| `muted` | boolean | 是否静音（由 `volume < 1e-6` 推导） |
+| `duration` | number(float) | 总时长，单位秒；未知时为 -1 |
+| `percent` | number(float) | 播放进度百分比 0~100 |
+
+### MetaInfo
+
+`meta` 属性写入的对象：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `title` | string | 曲目标题（歌名），最长 64 字节，可不传 |
+| `album` | string | 专辑名，最长 64 字节，可不传 |
+| `artist` | string | 艺术家/歌手，最长 64 字节，可不传 |
+
+## 注意事项
+
+- **音源路径**：
+  - `internal://cache/<path>`、`internal://file/<path>`、`internal://mass/<path>`、`internal://files/<path>` 会映射到 `<应用沙箱根目录>/<type>/<包名>/<path>`；`internal://tmp/<path>` 映射到 `<应用沙箱根目录>/tmp/<path>`（不带包名）。`<type>` 不在允许列表内或格式不正确时设置直接失败。
+  - 以 `/` 开头的路径映射到 `<应用沙箱根目录>/app/<包名><path>`（应用包内资源，如 `/common/music/record1.mp3`）。
+  - 其他字符串（如 `http://`/`https://` 网络地址）原样作为 URL 使用。
+- **src 只能在播放前设置**：首次 `play` 触发 prepare 后再写 `src` 会被忽略；切歌流程为 `stop` → 赋值新 `src` → `play`。
+- **时间单位**：JS 侧 `currentTime`/`duration` 均为**秒**（float），Native 内部与 media server 通信使用毫秒。
+- **音量精度**：JS 侧 0.0~1.0 的 double 会换算为 0~10 的整数档位（`value * 10`），最小调节粒度为 0.1。
+- **autoplay 行为**：官方标准描述 `autoplay` 为 true 时会自动播放并触发 `play` 事件；openvela 当前 Native 实现仅保存/上报该标记，不会自动开始播放，需显式调用 `play`。
+- **事件回调无参数**：所有 `onXxx` 事件回调都是无参函数，状态请通过 property 或 `getPlayState` 获取；不需要监听时赋 `null` 取消。
+- **单例对象**：模块导出的就是播放器实例本身，直接 `require('system.audio')` 后使用，无需创建。
+- **资源释放**：Feature 实例销毁时 Native 会关闭播放器、注销媒体会话并关闭定时器；页面退出前建议 `stop`。
+- 参考实现用例：`openvela/packages/apps/wearable/player/src/pages/player/player.ux`、`openvela/packages/apps/wearable/player/src/pages/volume/volume.ux`。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

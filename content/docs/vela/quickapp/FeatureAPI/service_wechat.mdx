@@ -1,0 +1,291 @@
+---
+title: "service.wechat 微信服务桥接"
+---
+
+> 快应用 JS 侧与微信（WeChat）小程序运行环境之间的桥接 Feature：JS 可以调用微信 SDK 提供的原生能力，并接收微信侧返回的任务结果与主动推送的事件。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `service.wechat` |
+| Feature 类型 | 标准 Feature（`service.` 前缀的服务桥接类 Feature，面向微信穿戴/小程序适配场景） |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import wechat from '@service.wechat'
+// 本仓库运行时/测试中使用的写法
+const wechat = require('service.wechat')
+```
+
+> 注意：模块名前缀是 `service.` 而不是 `system.`，`require('service.wechat')` 原样书写。
+
+## 功能概述
+
+该 Feature 是 JS 运行时与厂商微信 SDK 之间的适配层。Native 实现通过 `wechat_impl.h` 中声明的 `adam::` 系列接口调用微信 SDK（头文件注释指明 SDK 路径为 `vendor/xiaomi/miwear/apps/applications/wechat/sdk/`）：
+
+- JS 调用 `js_invoke_function` 发起一次原生能力调用（按函数名 + JSON 请求体），调用是异步的，结果通过事先注册的**任务回调**（`js_regist_task_callback`）按 `task_id` 匹配返回；
+- 微信 SDK 主动上报的事件通过事先注册的**事件回调**（`js_regist_event_callback`）推送给 JS。
+
+Native 侧使用 `uv_async_queue` 把 SDK 线程的回调数据转发到 JS 所在的 libuv 事件循环线程再执行 JS 回调。所有方法均为**同步触发、无返回值（`void`）**的 fire-and-forget 风格，JIDL 中没有 success/fail/Promise，错误只记录 Native 日志、不会回调 JS。
+
+典型使用顺序：先 `js_regist_task_callback` / `js_regist_event_callback` 注册回调，再分配唯一 `task_id` 并通过 `js_invoke_function` 发起调用；页面/应用退出时调用对应的 unregist 方法注销。
+
+> **社区补充（洛汐文档库）**：该接口是一条**异步任务总线**，不是微信登录、支付或网络请求 API。接口本身可导入不代表普通应用能连接微信服务——固件应用加载器中存在 `WECHAT_APP` 专用判断，包名、签名或进程身份可能参与授权。注册成功也不代表微信侧服务在线：手机未连接或未登录时，可能永远等不到任务结果。
+
+### 典型调用骨架（Promise 封装示例）
+
+> **社区补充（洛汐文档库）**：由于 JIDL 没有超时机制、也没有 Promise，调用方通常自行维护 `task_id → Promise` 的映射表、自己设置超时并清理；同一应用应只维护一套全局回调。下例中的 `func_name` 仅为占位符——固件未暴露微信侧允许调用的函数名清单，不应当成可直接运行的业务示例：
+
+```js
+const wechat = require('service.wechat')
+
+let nextTaskId = 1
+const pending = new Map
+
+wechat.js_regist_task_callback(result => {
+  const task = pending.get(result.task_id)
+  if (!task) return
+  pending.delete(result.task_id)
+
+  if (result.error_code === 0) {
+    task.resolve(result.resp_body)
+  } else {
+    task.reject(result)
+  }
+})
+
+wechat.js_regist_event_callback(({ event, event_body }) => {
+  console.log('wechat event', event, event_body)
+})
+
+function invokeWechat(funcName, body) {
+  const taskId = nextTaskId++
+  return new Promise((resolve, reject) => {
+    pending.set(taskId, { resolve, reject })
+    wechat.js_invoke_function({
+      task_id: taskId,
+      func_name: funcName,
+      request_body: JSON.stringify(body)
+    })
+  })
+}
+
+function disposeWechatBridge {
+  wechat.js_unregist_task_callback
+  wechat.js_unregist_event_callback
+  pending.clear
+}
+```
+
+## API
+
+### wechat.js_invoke_function(info)
+
+调用微信 SDK 提供的一个原生函数。调用立即返回（`void`），函数执行结果稍后通过任务回调（见 `js_regist_task_callback`）异步返回，并用同一个 `task_id` 关联。
+
+**参数（invokeInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| task_id | double（JS: number） | 是 | 无 | 任务 ID，由调用方生成并保证唯一；用于在任务回调中匹配本次调用的结果 |
+| func_name | string | 是 | 无 | 要调用的微信 SDK 函数名（原生函数名） |
+| request_body | string | 是 | 无 | 请求内容，通常为业务协议要求的 JSON 字符串，具体格式由被调用的 `func_name` 对应的微信 SDK 接口约定 |
+
+**成功返回 / success 回调参数**
+
+无（方法返回值为 `void`）。调用结果通过任务回调 `OnJsTaskCallback` 返回，其中 `task_id` 与本次传入值一致。
+
+**失败回调 fail / Promise reject**
+
+无 fail 回调、无 Promise。参数为空（`info` 为 null）或内部句柄异常时仅在 Native 日志中记录错误（`[Invoke Function] invaild arguments` / `wechat handle malloc failed`），JS 侧无感知。
+
+> **社区补充（洛汐文档库）**：`task_id` 在 JIDL 中是 `double`，JS 层应使用可安全精确表示的整数，不要超过 `Number.MAX_SAFE_INTEGER`。
+
+**示例**
+
+```js
+const wechat = require('service.wechat')
+
+// 先确保已注册任务回调（见下文），再发起调用
+wechat.js_invoke_function({
+  task_id: 1001,
+  func_name: 'someWechatFunc',
+  request_body: JSON.stringify({ key: 'value' })
+})
+```
+
+### wechat.js_regist_task_callback(task_cb)
+
+注册任务结果回调。微信 SDK 完成 `js_invoke_function` 发起的调用后，会通过该回调返回结果。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| task_cb | callback（`OnJsTaskCallback`） | 是 | 无 | 任务结果回调函数，签名为 `function (data: taskData)` |
+
+**回调参数（taskData）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| task_id | double（JS: number） | 对应 `js_invoke_function` 传入的任务 ID |
+| error_code | double（JS: number） | 微信 SDK 返回的错误码，具体取值以微信 SDK 为准（社区惯例：`0` 表示成功） |
+| resp_body | string | 响应内容，通常为 JSON 字符串，格式由对应 SDK 接口约定 |
+
+**成功返回 / 失败回调**
+
+无返回值（`void`），无 fail 回调。重复注册时会先移除上一次的任务回调，再以新回调替换（同一时刻只有一个任务回调生效）；传入空回调时仅记录 Native 日志。
+
+**示例**
+
+```js
+const wechat = require('service.wechat')
+
+wechat.js_regist_task_callback(function (data) {
+  console.log('task result:', data.task_id, data.error_code, data.resp_body)
+  // data.resp_body 通常是 JSON 字符串，按需解析（解析时应捕获异常）
+  // const resp = JSON.parse(data.resp_body)
+})
+```
+
+### wechat.js_regist_event_callback(event_cb)
+
+注册微信事件回调。微信 SDK 主动推送的事件（非某次 invoke 的直接结果）通过该回调上报。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| event_cb | callback（`OnJsEventCallback`） | 是 | 无 | 事件回调函数，签名为 `function (data: eventData)` |
+
+**回调参数（eventData）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| event | string | 事件名称，由微信 SDK 定义 |
+| event_body | string | 事件内容，通常为 JSON 字符串，格式由对应事件约定 |
+
+**成功返回 / 失败回调**
+
+无返回值（`void`），无 fail 回调。重复注册时会先移除上一次的事件回调再替换（同一时刻只有一个事件回调生效）；传入空回调时仅记录 Native 日志。
+
+**示例**
+
+```js
+const wechat = require('service.wechat')
+
+wechat.js_regist_event_callback(function (data) {
+  console.log('wechat event:', data.event, data.event_body)
+  // const body = JSON.parse(data.event_body)
+})
+```
+
+### wechat.js_unregist_task_callback
+
+注销已注册的任务结果回调，并通知微信 SDK 不再上报任务结果。
+
+**参数**
+
+无。
+
+**成功返回 / 失败回调**
+
+无返回值（`void`），无 fail 回调。内部句柄异常时仅记录 Native 日志（`[Unregist Task] wechat handle malloc failed`）。
+
+**示例**
+
+```js
+const wechat = require('service.wechat')
+
+wechat.js_unregist_task_callback
+```
+
+### wechat.js_unregist_event_callback
+
+注销已注册的微信事件回调，并通知微信 SDK 不再推送事件。
+
+**参数**
+
+无。
+
+**成功返回 / 失败回调**
+
+无返回值（`void`），无 fail 回调。内部句柄异常时仅记录 Native 日志（`[Unregist Event] wechat handle malloc failed`）。
+
+**示例**
+
+```js
+const wechat = require('service.wechat')
+
+wechat.js_unregist_event_callback
+```
+
+## 数据结构
+
+### taskData
+
+任务结果回调 `OnJsTaskCallback` 的参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| task_id | double（JS: number） | 任务 ID，与 `js_invoke_function` 传入值对应 |
+| error_code | double（JS: number） | 错误码，由微信 SDK 返回 |
+| resp_body | string | 响应体字符串（通常为 JSON） |
+
+### eventData
+
+事件回调 `OnJsEventCallback` 的参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| event | string | 事件名称 |
+| event_body | string | 事件内容字符串（通常为 JSON） |
+
+### invokeInfo
+
+`js_invoke_function` 的参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| task_id | double（JS: number） | 任务 ID，用于匹配任务结果回调 |
+| func_name | string | 微信 SDK 函数名 |
+| request_body | string | 请求体字符串（通常为 JSON） |
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **回调模型**：本 Feature 的方法全部是 `void` 同步调用，没有 success/fail/complete 回调，也没有 Promise；异步结果只能通过 `js_regist_task_callback` / `js_regist_event_callback` 注册的两个回调获取。
+- **单回调**：任务回调和事件回调同一时刻各只有一个生效；重复注册会替换旧回调（旧回调会被移除）。同一应用应只维护一套全局回调。
+- **task_id 匹配**：`js_invoke_function` 的结果不会直接返回，调用方需要自己生成并记住 `task_id`，在任务回调中按 `task_id` 区分是哪次调用的结果。`task_id`/`error_code` 在 JIDL 中为 `double`，JS 层取值不要超过 `Number.MAX_SAFE_INTEGER`。
+- **超时自理**：JIDL 没有超时机制，手机未连接/未登录微信时可能永远没有任务结果；调用方必须自己设置超时并清理待处理的任务映射。
+- **线程模型**：微信 SDK 的回调发生在 SDK 线程，Native 层通过 `uv_async_queue` 转发到 JS 事件循环线程后才执行 JS 回调，JS 回调内可安全操作快应用运行时。
+- **数据格式**：`func_name`、`request_body`、`resp_body`、`event`、`event_body` 的具体取值与 JSON 结构由微信 SDK 定义，本 Feature 只做字符串透传；`resp_body`/`event_body` 是否为 JSON 必须由具体业务协议决定，解析时应捕获异常。具体行为以微信 SDK（`vendor/xiaomi/miwear/apps/applications/wechat/sdk/`）为准。
+- **授权限制**：固件加载器存在 `WECHAT_APP` 专用判断，包名、签名或进程身份可能参与授权；接口可导入不代表微信服务可用。
+- **生命周期**：Feature 实例销毁时 Native 层会关闭异步队列并清理回调；实例 detach 后回调不再送达 JS。页面退出时应主动调用两个 unregist 方法。
+
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

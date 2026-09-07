@@ -1,0 +1,144 @@
+---
+title: MiWear Lua 原生模块
+description: 表盘宿主注入的 activity/dataman/topic/animengine/navigator/vibrator/screen/miwear 模块
+---
+
+Lua 表盘宿主提供 `activity`、`dataman`、`topic`、`animengine`、`navigator`、`vibrator`、`screen` 与初始化模块 `miwear`。
+
+```lua
+local activity = require("activity")
+local dataman = require("dataman")
+local topic = require("topic")
+local animengine = require("animengine")
+local navigator = require("navigator")
+local vibrator = require("vibrator")
+local screen = require("screen")
+```
+
+<Callout type="warn">
+不要使用 `require("miwear.topic")`；表盘实际加载名是 `topic`。
+</Callout>
+
+## activity
+
+### `activity.isShown(options) -> boolean`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `options.appID` | integer | 是 | Activity 应用类型 |
+| `options.pageID` | integer | 是 | 页面编号 |
+
+```lua
+local editing = activity.isShown {
+  appID = activity.APPID.WATCHFACE,
+  pageID = 2,
+}
+```
+
+可用常量：
+
+| 常量 | 值 | 说明 |
+|---|---|---|
+| `activity.APPID.WATCHFACE` | `2` | 表盘 Activity |
+| `activity.APPID.LUA` | `56` | Lua Activity |
+
+## dataman
+
+```lua
+dataman.subscribe(key, object, callback) -> token
+dataman.pause(token)
+dataman.resume(token)
+```
+
+`callback` 的实际参数是 `(object, value)`。完整键名、定点数格式和示例见 [dataman 数据订阅](/docs/vela/LUA/capabilities/dataman)。
+
+## topic
+
+```lua
+local handle = topic.subscribe(name, callback)
+handle:frequency(hz)
+handle:unsubscribe
+```
+
+topic 句柄只有订阅管理与频率设置；`start`、`remove`、`modify` 属于 `animengine` 动画对象，不属于 topic。详见 [topic 消息订阅](/docs/vela/LUA/capabilities/topic)。
+
+## animengine
+
+```lua
+local animation = animengine.create(object, json)
+animation:start
+animation:modify(json)
+animation:remove
+```
+
+详见 [animengine 动画](/docs/vela/LUA/capabilities/animengine)。
+
+## navigator
+
+```lua
+navigator.finish
+```
+
+结束当前 Lua 页面或 Activity。调用后应立即停止继续访问页面控件。
+
+## miwear
+
+`miwear` 用于初始化宿主，没有确认到稳定的业务成员。表盘功能应从其他模块调用。
+
+## vibrator
+
+```lua
+vibrator.start(type [, repeat])
+vibrator.cancel(type)
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `type` | integer | `vibrator.type` 中的振动类型 |
+| `repeat` | boolean | 是否重复，省略时为单次 |
+
+确认导出的类型：
+
+| 常量 | 说明 |
+|---|---|
+| `CROWN` | 表冠反馈 |
+| `KEY_BOARD` | 键盘反馈 |
+| `WATCH_FACE` | 表盘反馈 |
+| `SYSTEM_OPRATION` | 系统操作，接口原拼写 |
+| `HEALTH_ALERT` | 健康提醒 |
+| `SYSTEM_EVENT` | 系统事件 |
+| `TARGET_DONE` | 目标完成 |
+| `BREATHING_TRAINING` | 呼吸训练 |
+| `INCOMING_CALL` | 来电 |
+| `CLOCK_ALARM` | 闹钟 |
+| `SLEEP_ALARM` | 睡眠闹钟 |
+
+```lua
+vibrator.start(vibrator.type.WATCH_FACE, false)
+```
+
+## screen
+
+`require("screen")` 返回一个空 table。没有确认到 `screen.ON`、`screen.OFF`、状态订阅函数或截图函数。不要根据原生层的 `ScreenStateChangedCB` 字符串自行构造 Lua API。
+
+## 机型可用性
+
+| 模块 | Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|---|---|---|
+| `activity` | ✅ | ✅ |
+| `dataman` | ✅ | ✅ |
+| `topic` | ✅ | ✅ |
+| `animengine` | ✅ | ✅ |
+| `navigator` | ✅ | ✅ |
+| `vibrator` | ✅ | ✅ |
+| `screen` | ✅ | ✅ |
+
+## 获取源代码
+
+- [社区 Lua 模块文档](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua)
+
+---
+
+## 参考来源
+
+- 洛汐文档库 https://docs.luoxe.cn/ （lua_vendor-modules.md）

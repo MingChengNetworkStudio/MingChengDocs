@@ -1,0 +1,26 @@
+---
+title: "OTA rc.sysinit"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 58 字节  
+SHA-256 |  `84caafba06dcf66f426405c9e84a5d5e2c70b803a3c6295aa213c9c4ab931431`  
+阶段 | OTA 最小初始化  
+  
+这是五套环境中最短的 `rc.sysinit`：
+```text
+
+
+set +e
+mount -t procfs "/proc"
+mount -t tmpfs /tmp
+
+```
+
+它只建立 procfs 和临时内存文件系统。`/resource` 与 `/data` 留给 OTA `rcS` 挂载，使该脚本能检查挂载返回码并按更新逻辑处理错误。
+
+OTA 环境不启动 `kvdbd`、MiWear、健康或 UI 业务 daemon，尽量减少更新时的资源占用和分区竞争。属性命令由该镜像的基础运行环境提供，具体持久化机制可能已经静态集成。
+
+修改这个脚本通常没有必要；把业务服务加入 OTA 环境会增加更新失败和设备节点冲突风险。

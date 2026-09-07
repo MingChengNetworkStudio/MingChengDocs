@@ -1,0 +1,19 @@
+---
+title: "OTA build.prop"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 203 字节  
+SHA-256 |  `7ed497f987f8ab85a310a3df4bc7159a410d534130071fd63bdfc740a38c73d0`  
+使用阶段 | OTA 更新环境  
+  
+该文件与 BL2 的 `build.prop` 完全相同：版本为 `3.101.036`，产品类型为 `band`，屏幕为 `rect`，build id 为 `CONBINE_LTALM078_T3.101.036`。
+
+OTA 环境不渲染正常系统 UI，因此没有 `ro.sf.lcd_density`，customer version 也使用缩短值 `CONBINE_LTALM078_T`。
+
+## 用途
+这些属性主要用于更新日志、镜像环境识别和可能的升级脚本条件。真正决定包能否安装的仍是签名验证、版本/预检查状态和 `ota.sh` 执行结果，不是单个文本版本号。
+
+只修改 OTA `build.prop` 不会改变刷入后的 AP 版本；更新完成后系统读取的是新 AP 自己的属性。

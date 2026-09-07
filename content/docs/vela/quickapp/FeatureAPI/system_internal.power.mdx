@@ -1,0 +1,177 @@
+---
+title: "system.internal.power 电源管理（内部 Feature）"
+---
+
+> 提供设备关机与重启能力。**内部 Feature**，主要供系统/框架内部使用，普通快应用不应直接依赖。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.internal.power` |
+| Feature 类型 | **内部 Feature**（`*.internal.*`，一般不直接面向应用） |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import power from '@system.internal.power'
+// 本仓库运行时/测试中使用的写法
+const power = require('system.internal.power')
+```
+
+## 功能概述
+
+`system.internal.power` 封装了设备级电源操作：`shutDown` 关机、`reboot` 重启。Native 实现通过 NuttX 板级控制接口 `boardctl`（头文件 `sys/boardctl.h`）实现——关机调用 `boardctl(BOARDIOC_POWEROFF, 0)`，重启调用 `boardctl(BOARDIOC_RESET, 0)`，具体行为依赖板级（BSP）对这两个命令的支持。
+
+两个方法均为**回调风格**（参数为 `RetStatus`，含 `success` / `fail` / `complete` 回调），无 Promise、无返回值（`void`）。
+
+## API
+
+### power.shutDown(status)
+
+关闭设备电源。Native 调用 `boardctl(BOARDIOC_POWEROFF, 0)` 请求板级关机。
+
+**参数（RetStatus 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function（`success_cb`） | 否 | `null` | 成功回调，参数为 `(data: string)`，Native 调用时传入 `"0"` |
+| fail | function（`fail_cb`） | 否 | `null` | 失败回调，参数为 `(data: string, code: number)`；`data` 为 `"fail"`，`code` 为 `boardctl` 返回的错误码 |
+| complete | function（`complete_cb`） | 否 | `null` | 完成回调（无论成功失败都会调用），参数为 `(data: string)`，成功时为 `"success"`，失败时为 `"fail"` |
+
+（参数整体可选：`shutDown(RetStatus status = null)`。）
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string | 固定为 `"0"` |
+
+> 注意：关机真正成功后设备会断电，JS 运行时随即终止，因此 `success` / `complete` 回调在实际关机场景下通常**不会被执行到**；能收到回调往往意味着板级未真正断电或调用失败。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：
+
+| code | data | 触发场景 |
+| ---- | ---- | -------- |
+| `boardctl(BOARDIOC_POWEROFF, 0)` 的返回值（非 0） | `"fail"` | 板级关机请求失败 |
+
+> 若调用时**不传参数**（`status` 为 `null`），Native 仅打印错误日志（`no status arg!`），不执行任何回调，也不会通知 JS 侧结果。
+
+**示例**
+
+```js
+const power = require('system.internal.power')
+
+power.shutDown({
+  success: function (data) {
+    console.log('关机指令已接受', data)
+  },
+  fail: function (data, code) {
+    console.log('关机失败', code, data)
+  },
+  complete: function (data) {
+    console.log('关机流程结束', data)
+  }
+})
+```
+
+### power.reboot(status)
+
+重启设备。Native 调用 `boardctl(BOARDIOC_RESET, 0)` 请求板级重启。
+
+**参数（RetStatus 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function（`success_cb`） | 否 | `null` | 成功回调，参数为 `(data: string)`，Native 调用时传入 `"0"` |
+| fail | function（`fail_cb`） | 否 | `null` | 失败回调，参数为 `(data: string, code: number)`；`data` 为 `"fail"`，`code` 为 `boardctl` 返回的错误码 |
+| complete | function（`complete_cb`） | 否 | `null` | 完成回调（无论成功失败都会调用），参数为 `(data: string)`，成功时为 `"success"`，失败时为 `"fail"` |
+
+（参数整体可选：`reboot(RetStatus status = null)`。）
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string | 固定为 `"0"` |
+
+> 注意：重启真正成功后设备会立即复位，JS 运行时终止，因此 `success` / `complete` 回调在实际重启场景下通常**不会被执行到**。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：
+
+| code | data | 触发场景 |
+| ---- | ---- | -------- |
+| `boardctl(BOARDIOC_RESET, 0)` 的返回值（非 0） | `"fail"` | 板级重启请求失败 |
+
+> 若调用时**不传参数**（`status` 为 `null`），Native 仅打印错误日志（`no status arg!`），不执行任何回调。
+
+**示例**
+
+```js
+const power = require('system.internal.power')
+
+power.reboot({
+  success: function (data) {
+    console.log('重启指令已接受', data)
+  },
+  fail: function (data, code) {
+    console.log('重启失败', code, data)
+  },
+  complete: function (data) {
+    console.log('重启流程结束', data)
+  }
+})
+```
+
+## 数据结构
+
+### RetStatus
+
+`shutDown` / `reboot` 的参数对象，三个回调均可选（默认 `null`）。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| success | callback（`success_cb`） | 成功回调，签名 `(data: string)`，Native 传入 `"0"` |
+| fail | callback（`fail_cb`） | 失败回调，签名 `(data: string, code: int)`，Native 传入 `("fail", boardctl 返回码)` |
+| complete | callback（`complete_cb`） | 完成回调，签名 `(data: string)`，Native 传入 `"success"` 或 `"fail"` |
+
+## 注意事项
+
+- **内部 Feature**：模块名为 `system.internal.power`，属于 `*.internal.*` 内部接口，仅供系统/框架内部使用，普通快应用不要直接调用；接口可能随版本变化而不保证兼容。
+- **板级依赖**：关机/重启最终依赖 NuttX `boardctl` 的 `BOARDIOC_POWEROFF` / `BOARDIOC_RESET` 命令，需要板级（BSP）实现支持；板级不支持或执行失败时，`fail` 回调返回 `boardctl` 的错误码。
+- **回调为一次性**：Native 在每次调用结束后会移除本次传入的 `success` / `fail` / `complete` 回调（`FeatureRemoveCallback`），回调不会重复触发。
+- **不传参数的行为**：`shutDown` / `reboot` 可以不带参数调用（JIDL 中参数默认为 `null`），此时 Native 仍会执行关机/重启动作，但 JS 侧得不到任何回调通知。
+- **成功回调不可靠**：关机/重启成功意味着运行时终止，不要在 `success`/`complete` 中放置需要后续执行的逻辑；失败处理请放在 `fail` 中。
+- Native 实现文件由 `jsongensource.py` 自动生成（文件头标注），具体行为以 Native 实现为准。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

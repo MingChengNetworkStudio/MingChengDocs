@@ -1,0 +1,21 @@
+---
+title: "AP D-Bus system.d"
+---
+
+`system.d` 是 D-Bus 系统服务策略片段目录。`system.conf` 同时加载相对 `system.d` 和绝对 `/etc/dbus-1/system.d`；正常情况下服务可在这里用独立 `.conf` 文件声明可拥有的 bus name、可调用的接口和允许用户。
+
+o63 ROMFS 中该位置只有一个零字节 `.gitkeep` 占位文件，提取路径表现为 `dbus-1/system.d/system.d/.gitkeep`，没有实际 `.conf` 策略。`.gitkeep` 不是 D-Bus 规范文件，daemon 不会把它当成策略。
+
+## 如何添加策略
+典型策略文件需要以 `.conf` 结尾并包含 `busconfig` 根节点。添加前必须先确定服务的 bus name、接口、调用用户及最小权限；不要复制“allow all”模板。错误策略可能让服务无法拥有名称，或让普通进程访问帐号、数字钥匙和设备控制接口。
+
+该目录位于 AP ROMFS。要让系统 daemon 自动读取新增文件，需要重建镜像或在 daemon 启动前把可写目录挂载到对应路径；仅创建 `/data/dbus-1/system.d` 不会生效，除非同时修改启动参数或挂载关系。
+
+## 机型可用性
+机型/样本 | 结果  
+---|---  
+Xiaomi Watch S4 41mm（o63） | 目录存在，只有空占位文件  
+Xiaomi Smart Band 10 Pro（p67tc） | AP `/etc` 未发现该目录  
+  
+## 获取源代码
+  * [D-Bus bus configuration manual](https://dbus.freedesktop.org/doc/dbus-daemon.1.html)

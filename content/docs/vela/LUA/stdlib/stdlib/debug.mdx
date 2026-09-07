@@ -1,0 +1,58 @@
+---
+title: debug（调试库）
+---
+
+## 概览
+
+`debug` 主要用于**调试与诊断**：获取调用栈信息、生成 traceback、检查局部变量/上值等。
+在很多设备固件或生产环境中，`debug` 经常被裁剪或受限（出于性能/安全考虑）。
+
+## 模块结构（速查）
+
+| 成员 | 类型 | 说明 | 可用性 |
+|---|---|---|---|
+| `debug.traceback([thread,] [message,] [level])` | `function` | 生成栈回溯字符串 | `可能不可用（常被裁剪）` |
+| `debug.getinfo([thread,] f[, what])` | `function` | 获取函数/栈帧信息 | `可能不可用（常被裁剪）` |
+| `debug.getlocal([thread,] level, local)` | `function` | 读取局部变量 | `可能不可用（常被裁剪）` |
+| `debug.setlocal([thread,] level, local, value)` | `function` | 修改局部变量 | `可能不可用（常被裁剪）` |
+| `debug.getupvalue(f, up)` / `debug.setupvalue(f, up, value)` | `function` | 读取/修改上值 | `可能不可用（常被裁剪）` |
+| `debug.upvalueid(f, n)` / `debug.upvaluejoin(f1, n1, f2, n2)` | `function` | 上值标识/合并（版本相关） | `可能不可用（版本差异/裁剪）` |
+| `debug.getuservalue(u)` / `debug.setuservalue(u, v)` | `function` | 读取/设置 userdata 的 uservalue（版本相关） | `可能不可用（版本差异/裁剪）` |
+| `debug.getregistry` | `function` | 获取注册表（高级用法） | `可能不可用（常被裁剪）` |
+| `debug.getmetatable(v)` / `debug.setmetatable(v, mt)` | `function` | 获取/设置任意值的元表 | `可能不可用（常被裁剪）` |
+| `debug.sethook([thread,] hook, mask[, count])` | `function` | 设置调试钩子 | `可能不可用（常被裁剪）` |
+| `debug.gethook([thread])` | `function` | 获取当前钩子 | `可能不可用（常被裁剪）` |
+| `debug.debug` | `function` | 交互式调试（通常无） | `可能不可用（常被裁剪）` |
+
+## 最常用：traceback
+
+```lua
+local function a error("boom") end
+local function b a end
+
+local ok, err = xpcall(b, function(e)
+  if debug and type(debug.traceback) == "function" then
+    return debug.traceback(e, 2)
+  end
+  return tostring(e)
+end)
+
+print("ok?", ok)
+print(err)
+```
+
+## 使用建议
+
+- 设备侧尽量只依赖 `debug.traceback`（若存在）做日志定位。
+- 调试钩子（`sethook`）对性能影响较大，不建议在高频场景启用。
+
+### 社区补充（洛汐文档库）
+
+- 洛汐文档库的宿主成员索引确认 Vela 表盘宿主注册了完整 debug 库，共 17 个成员：`debug.debug`、`gethook`、`getinfo`、`getlocal`、`getmetatable`、`getregistry`、`getupvalue`、`getuservalue`、`setcstacklimit`、`sethook`、`setlocal`、`setmetatable`、`setupvalue`、`setuservalue`、`traceback`、`upvalueid`、`upvaluejoin`。
+- 其中 **`debug.setcstacklimit`** 未列入本篇速查表：它用于设置 Lua 对 C 调用栈的嵌套深度限制并返回旧的限制值（Lua 5.4 新增），宿主已注册。
+- **安全边界**：debug 库可越过普通封装边界（读写局部变量、上值、uservalue、注册表等）。系统应用不应把不可信脚本放进共享 Lua state，以免封装隔离失效。
+
+## 参考来源：官方 docs-lua / 洛汐文档库
+
+- 官方 Lua 5.4 参考手册·标准库：[lua.org/manual/5.4/manual.html#6](https://www.lua.org/manual/5.4/manual.html#6)
+- 洛汐文档库《Lua 5.4 标准库》：[docs.luoxe.cn/docs/vela/lua/standard-library](https://docs.luoxe.cn/docs/vela/lua/standard-library/)

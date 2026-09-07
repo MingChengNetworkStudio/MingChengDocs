@@ -1,0 +1,353 @@
+---
+title: "system.brightness 屏幕亮度"
+---
+
+> 查询、设置屏幕亮度与亮度模式，控制屏幕常亮，并监听亮度/模式变化。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.brightness` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.brightness" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import brightness from '@system.brightness'
+// 或
+const brightness = require('@system.brightness')
+// 本仓库运行时/测试中使用的写法
+const brightness = require('system.brightness')
+```
+
+## 功能概述
+
+`system.brightness` 提供屏幕亮度的读取与设置、亮度模式（手动/自动）的读取与设置、屏幕常亮（KeepScreenOn）控制，以及亮度值和亮度模式变化的监听。官方标准定义的能力包括：
+
+- `getValue`：获得当前屏幕亮度值，取值范围 **0–255**；
+- `setValue`：设置当前屏幕亮度值，取值范围 **0–255**；
+- `getMode` / `setMode`：读取/设置亮度模式，`0` 为手动调节屏幕亮度，`1` 为自动调节屏幕亮度；
+- `setKeepScreenOn`：设置是否保持屏幕常亮状态。
+
+Native 层有两套实现：编译开启 `CONFIG_SYSTEM_BRIGHTNESS_SERVICE` 时，通过 binder 调用系统 `brightness.service`（`IBrightnessService`），并通过 `BnBrightnessObserver` 接收变化回调；未开启时，通过 NuttX 侧的 libuv 扩展接口（`uv_brightness_*`）直接操作亮度设备。所有方法均为**回调风格**（success / fail / complete），JIDL 未提供 Promise 版本。
+
+## API
+
+### brightness.getValue(params)
+
+获取当前屏幕亮度值。异步模型：回调风格（success / fail / complete）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 成功回调，参数为 `GetValueModeSuccCBParam` |
+| fail | function | 否 | - | 失败回调，签名 `(msg: string, code: number)` |
+| complete | function | 否 | - | 结束回调（成功/失败都会调用），无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number | 当前屏幕亮度值（binder 后端取值范围 0–255） |
+| mode | number | JIDL 定义中与 value 同结构；当前 Native 实现把同一返回值同时填入 `value` 和 `mode`，对 `getValue` 而言该字段也是亮度值 |
+
+> 官方标准文档描述：success 仅返回 `value`（Integer，屏幕亮度，取值范围 0–255）。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误信息：binder 后端固定返回 `"execute error"`；code 为负数（服务调用失败时为 `-1`）；NuttX 后端在 `uv_brightness_getval` 提交失败时返回通用错误码 `FT_ERR_GENERAL`。实现未定义更细粒度的固定错误码表。
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+brightness.getValue({
+  success: function (ret) {
+    console.log('current brightness:', ret.value)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {
+    console.log('getValue complete')
+  }
+})
+```
+
+### brightness.setValue(params)
+
+设置屏幕亮度值。异步模型：回调风格（success / fail / complete）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| value | number | 是 | - | 目标亮度值。屏幕亮度取值范围 **0–255**；binder 后端仅接受 **0–255**（`0 <= value <= 255`），超出范围按失败处理 |
+| success | function | 否 | - | 成功回调，无参数 |
+| fail | function | 否 | - | 失败回调，签名 `(msg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- binder 后端：亮度值超出 0–255 范围、或 `setTargetBrightness` 调用失败时，fail 被调用，错误信息为 `"execute error"`，code 为负数（如 `-1`）。
+- NuttX 后端：`uv_brightness_setval` 提交失败时返回通用错误码 `FT_ERR_GENERAL`。
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+// 设置亮度为 100
+brightness.setValue({
+  value: 100,
+  success: function  {
+    console.log('set brightness ok')
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### brightness.getMode(params)
+
+获取当前亮度模式（手动/自动）。异步模型：回调风格（success / fail / complete）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 成功回调，参数为 `GetValueModeSuccCBParam` |
+| fail | function | 否 | - | 失败回调，签名 `(msg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number | JIDL 结构字段；当前 Native 实现把模式值同时填入 `value` 和 `mode`，二者相同 |
+| mode | number | 亮度模式：`1` 表示自动亮度（AUTO），`0` 表示手动亮度（MANUAL） |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- 错误信息为 `"execute error"`，code 为负数（如 `-1`）；NuttX 后端提交失败时为 `FT_ERR_GENERAL`。实现未定义固定错误码表。
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+brightness.getMode({
+  success: function (ret) {
+    // ret.mode：1 = 自动亮度，0 = 手动亮度
+    console.log('brightness mode:', ret.mode)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### brightness.setMode(params)
+
+设置亮度模式（手动/自动）。异步模型：回调风格（success / fail / complete）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| mode | number | 是 | - | 亮度模式：`1` 为自动亮度（AUTO），`0` 为手动亮度（MANUAL）。binder 后端仅接受 `0` 或 `1`，其他值按失败处理 |
+| success | function | 否 | - | 成功回调，无参数 |
+| fail | function | 否 | - | 失败回调，签名 `(msg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- binder 后端：`mode` 不是 `0`/`1`、或 `setBrightnessMode` 调用失败时，fail 被调用，错误信息为 `"execute error"`，code 为负数（如 `-1`）。
+- NuttX 后端：`uv_brightness_setmode` 提交失败时返回通用错误码 `FT_ERR_GENERAL`。
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+// 切换为自动亮度
+brightness.setMode({
+  mode: 1,
+  success: function  {
+    console.log('set mode ok')
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### brightness.setKeepScreenOn(params)
+
+设置屏幕是否常亮（不自动熄屏）。异步模型：回调风格（success / fail / complete）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| keepScreenOn | boolean | 是 | - | `true` 保持屏幕常亮；`false` 恢复默认熄屏策略 |
+| success | function | 否 | - | 成功回调，无参数 |
+| fail | function | 否 | - | 失败回调，签名 `(msg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(msg: string, code: number)`
+- NuttX 后端：`uv_brightness_setkeepon` 提交失败时返回通用错误码 `FT_ERR_GENERAL`。
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+// 视频播放期间保持屏幕常亮
+brightness.setKeepScreenOn({
+  keepScreenOn: true,
+  success: function  {
+    console.log('keep screen on')
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {}
+})
+
+// 恢复默认
+brightness.setKeepScreenOn({ keepScreenOn: false })
+```
+
+### brightness.systembrightnessrecovery（社区资料：洛汐文档库）
+
+> 以下为洛汐社区文档记录的补充接口。**当前公开 JIDL 已不再声明该方法**，openvela 实证 JIDL 中无此 API；固件中包含独立 Native 实现 `__brightness_systembrightnessrecovery`，只能视为版本私有兼容接口，使用前务必用 `app.canIUse` 探测。
+
+旧版 brightness feature 的内部恢复入口，用于把快应用修改过的亮度/屏幕状态恢复到系统值。方法无参数，固件未显示返回值或回调。它的职责是恢复由快应用亮度模块修改过的系统亮度/亮屏状态，适合在页面退出后的清理阶段调用。
+
+```js
+import app from '@system.app'
+import brightness from '@system.brightness'
+
+if (app.canIUse('@system.brightness.systembrightnessrecovery')) {
+  brightness.systembrightnessrecovery
+}
+```
+
+页面销毁时的清理写法：
+
+```js
+onDestroy {
+  try {
+    if (app.canIUse('@system.brightness.systembrightnessrecovery')) {
+      brightness.systembrightnessrecovery
+    }
+  } catch (e) {}
+}
+```
+
+注意：不要把它理解成"恢复出厂亮度"——它恢复的是 brightness feature 保存的系统状态，具体目标值由系统实现决定。若应用从未修改亮度，通常无需调用。
+
+社区资料标注的机型可用性：Xiaomi Smart Band 10 Pro ✅、Xiaomi Watch S4 41mm ✅。
+
+## 属性（property）
+
+JIDL 定义了两个 **writeonly**（只写）事件属性，赋值为一个回调函数即可订阅对应变化；赋值后由 Native 在亮度/模式变化时回调。
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| onbrightnesschanged | function(data: object) | 只写 | 亮度值变化时触发，`data` 为 `{ value: number }`，`value` 为新的亮度级别 |
+| onmodechanged | function(data: object) | 只写 | 亮度模式变化时触发，`data` 为 `{ mode: number }`，`mode` 为新模式（`1` 自动 / `0` 手动） |
+
+**示例**
+
+```js
+const brightness = require('system.brightness')
+
+brightness.onbrightnesschanged = function (data) {
+  console.log('brightness changed:', data.value)
+}
+
+brightness.onmodechanged = function (data) {
+  console.log('mode changed:', data.mode) // 1 = 自动，0 = 手动
+}
+```
+
+## 数据结构
+
+### GetValueModeSuccCBParam
+
+`getValue` / `getMode` 的 success 回调参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number | 整数值（`getValue` 时为亮度值；`getMode` 时与 `mode` 相同） |
+| mode | number | 整数值（`getMode` 时为亮度模式：1 自动 / 0 手动；`getValue` 时与 `value` 相同） |
+
+## 注意事项
+
+- **两套后端实现**：开启 `CONFIG_SYSTEM_BRIGHTNESS_SERVICE` 时走 binder 系统服务（`brightness.service`）；否则走 NuttX 的 `uv_brightness_*` libuv 扩展。两端能力不完全一致：
+  - `setKeepScreenOn` 在 binder 后端当前为 **TODO（未实现）**，不会触发回调；NuttX 后端通过 `uv_brightness_setkeepon` 实现，且 `keepScreenOn: true` 时会额外调用 `uv_brightness_turnon` 点亮屏幕。
+  - `onbrightnesschanged` / `onmodechanged` 两个事件属性**仅在 binder 后端实现**（通过 `monitorBrightness` 注册 `BnBrightnessObserver`）；NuttX 后端的属性 setter 为空实现，赋值不会收到回调。
+- **亮度取值范围**：以 Native 实现为准，binder 后端 `setValue` 仅接受 **0–255** 的整数，超出范围直接走 fail 回调（与官方标准文档"屏幕亮度，取值范围 0-255"一致）。
+- **模式取值**：JS 侧 `mode` 为 `1`（自动）/ `0`（手动），与官方标准文档"0 为手动调节屏幕亮度，1 为自动调节屏幕亮度"一致。注意这与 Native 服务内部枚举（AUTO=0、MANUAL=1）相反，impl 层已做翻转，JS 开发者按 `1=自动、0=手动` 使用即可。
+- **回调一次性**：各方法传入的 success / fail / complete 回调在调用完成后会被 Native 移除（`FeatureRemoveCallback`），不会重复触发。
+- 模块实例释放（detach）时，Native 会注销亮度观察者或执行 `uv_brightness_recovery`/`uv_brightness_close` 清理资源。
+- 社区资料中的 `systembrightnessrecovery` 为旧版私有恢复接口，当前 JIDL 未声明；需要类似清理能力时以 Native detach 时的自动恢复为准，或在 canIUse 探测可用后谨慎调用（社区资料：洛汐文档库）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

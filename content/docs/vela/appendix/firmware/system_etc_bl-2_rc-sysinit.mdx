@@ -1,0 +1,33 @@
+---
+title: "BL2 rc.sysinit"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 325 字节  
+SHA-256 |  `5e538725470f03bbc30fe40c355f40ea54e3fada2dc6f5a8b5df542280def784`  
+阶段 | BL2 基础挂载与工厂信息同步  
+  
+## 挂载项
+挂载点 | 设备 | 文件系统/选项 | 用途  
+---|---|---|---  
+`/tmp` | 内存 | tmpfs | 引导临时文件  
+`/data` |  `/dev/nand_data` | YAFFS `autoformat` | 应用和系统数据  
+`/wasted_nv` |  `/dev/nand_nv` | YAFFS `autoformat` | 旧/废弃或兼容 NV 数据区域  
+`/mode` |  `/dev/mode` | LittleFS | 启动模式状态  
+`/misc` |  `/dev/nv` | LittleFS `autoformat` | 持久属性和引导状态  
+  
+BL2 没有挂载 `/resource` 或 procfs；这些只在需要时由后续 `rcS` 或目标镜像处理。
+
+## 启动命令
+命令 | 作用  
+---|---  
+`kvdbd &` | 为 `getprop/setprop` 等持久状态提供键值数据库服务  
+`fac_assemble` | 读取/组装工厂数据、板级身份或校准信息  
+`factory_sync` | 把工厂信息同步到当前系统可用位置  
+  
+`fac_assemble` 和 `factory_sync` 是厂商命令，公开源码不足以还原所有字段。它们在 BL2 启动决策之前运行，说明板级身份和工厂状态可能直接影响是否进入 Factory 以及后续产品配置。
+
+## 修改风险
+更改 `/misc`、`/mode` 的挂载设备会破坏 OTA 重试计数、factory finished 等属性。`/wasted_nv` 名称虽然像废弃区，也不应在未确认数据格式前清空。

@@ -1,0 +1,142 @@
+---
+title: "/dev 设备节点"
+---
+
+本页汇总 p67tc 与 o63 启动脚本及二进制中出现的 `/dev` 路径。它不是某次开机后的 `ls /dev` 快照：节点由驱动在运行时注册，机型和启动环境可见的集合并不完全相同。
+
+不要直接试写未知设备
+
+对分区节点执行 `dd`、重定向或随机 `ioctl` 可能立即破坏系统；对 watchdog、充电、NFC、触控固件节点误操作也可能造成重启、失去触控或硬件异常。先只读检查节点类型和挂载关系。
+
+## 分区、块设备与挂载源
+o63 使用更细的资源分区布局：`/dev/vendor`、`/dev/system`、`/dev/app`、`/dev/misc`、`/dev/i18n`、`/dev/font`、`/dev/watchface`、`/dev/quickapp`、`/dev/factory` 分别挂载；`/dev/data` 是 FATFS/exFAT 数据分区，`/dev/userlog` 是独立日志分区。p67tc 的启动路径则以 `/dev/resource` 和 `/dev/nand_data` 为主。写盘或恢复前必须先按当前机型的 `mount` 输出确认。
+
+节点 | 用途  
+---|---  
+`/dev/ap` | AP 系统分区。OTA 脚本把 `vela_ap.bin` 以 32 KiB 块写入此节点，并启用写后校验。  
+`/dev/bl2` | 第二阶段启动/升级分区。OTA 脚本把 `vela_bl2.bin` 写入此节点。  
+`/dev/resource` | 只读资源分区，正常系统和 Recovery 都将其以 ROMFS 挂载到 `/resource`。  
+`/dev/nand_data` | 主数据 NAND 分区，以 YAFFS 挂载到 `/data`。`autoformat` 允许首次启动/损坏时重建。  
+`/dev/nand_nv` | BL2 中以 YAFFS 挂到 `/wasted_nv` 的 NAND 持久区；正常 AP 脚本未挂载它。  
+`/dev/nv` | 小型非易失分区，以 LittleFS 挂到 `/misc`。  
+`/dev/mode` | 模式分区，以 LittleFS 挂到 `/mode`，供启动模式或升级流程保存状态。  
+`/dev/data` | 二进制中存在的另一数据设备名；当前五套启动脚本实际挂载的是 `/dev/nand_data`，不要把两者视为同一节点后直接写入。  
+`/dev/bes_flash` | BES 平台底层 Flash 驱动接口，面向原始闪存控制/测试逻辑。  
+`/dev/bes_nand` | BES 平台底层 NAND 驱动接口，层级低于 `/dev/nand_data` 这类文件系统分区。  
+`/dev/ram`、`/dev/ram0` | RAM 块设备/首个 RAM disk，常用于临时文件系统、测试或镜像挂载。  
+`/dev/loop` | loop 驱动控制或基础名。Recovery 实际构造 `/dev/loop0`～`/dev/loop2`。  
+`/dev/loop0` | Recovery 将 `/resource/watchface.bin` 绑定到此节点，再以 ROMFS 挂到 `/watchface`。  
+`/dev/loop1` | Recovery 将 `/resource/font.bin` 绑定后挂到 `/font`。  
+`/dev/loop2` | Recovery 将 `/resource/i18n.bin` 绑定后挂到 `/i18n`。  
+`/dev/tmpb`、`/dev/tmpc` | 固件包含的临时块/测试设备名，启动脚本未使用；用途和数据格式不能仅凭路径确定。  
+  
+`/dev/ap` 与 `/dev/bl2` 来自升级包的 `ota.sh`；其余挂载节点可在各环境的 `rc.sysinit`、`rcS` 或二进制访问路径中确认。
+
+## 控制台、日志与标准伪设备
+节点 | 用途  
+---|---  
+`/dev/console` | 系统控制台，早期启动输出和交互 shell 的默认终端。  
+`/dev/tty` | 当前进程的控制终端。  
+`/dev/ttyS0`、`/dev/ttyS1`、`/dev/ttyS2` | 硬件串口，具体哪一路接调试口、外设或协处理器取决于板级配置。  
+`/dev/pty`、`/dev/ptmx`、`/dev/pts/`、`/dev/ttyp` | 伪终端主从设备，用于 shell、调试会话或进程间终端仿真。  
+`/dev/kmsg` | 内核消息接口，用于读取或写入内核日志。  
+`/dev/log` | 系统日志设备；AP 启动脚本把服务输出重定向到日志体系。  
+`/dev/logrpmsg` | 经 RPMsg 传输日志的接口，常用于主核与远端核/协处理器之间转发日志。  
+`/dev/null` | 丢弃写入数据，读取立即返回 EOF。  
+`/dev/zero` | 读取时产生全零字节。  
+`/dev/random`、`/dev/urandom` | 随机数设备。密码学代码应使用系统提供的安全随机接口，不要自行降级。  
+`/dev/oneshot` | one-shot 定时器驱动接口，供一次性高精度定时/调度使用；具体 `ioctl` 需匹配该固件驱动。  
+  
+## 显示、按键与输入设备
+节点 | 用途  
+---|---  
+`/dev/fb`、`/dev/fb0` | framebuffer 显示设备；`fb0` 通常表示首块显示缓冲。  
+`/dev/input0` | 首个通用输入设备，事件格式由 NuttX 输入驱动决定。  
+`/dev/buttons` | 板级实体按键接口。  
+`/dev/ubutton` | user-space button/虚拟按键设备。  
+`/dev/ukeyboard` | user-space/虚拟键盘设备。  
+`/dev/mouse0` | 首个鼠标/指针类输入设备，触控适配层也可能复用此类接口。  
+  
+节点存在不代表第三方应用可以读取。输入设备一般由系统 UI 独占或受权限限制，直接消费事件还可能与系统手势冲突。
+
+## 传感器与 uORB
+节点 | 用途  
+---|---  
+`/dev/i2c` | 通用 I²C 总线接口，供传感器和外设驱动访问。总线号/地址由板级配置决定。  
+`/dev/usensor` | NuttX 统一传感器接口或其兼容层。  
+`/dev/uorb/` | uORB 发布/订阅设备目录。  
+`/dev/uorb/sensor_` | 代码拼接传感器 topic 名称时使用的前缀。  
+`/dev/uorb/sensor_accel0` | 首个加速度计 topic/设备。  
+`/dev/uorb/sensor_gyro0` | 首个陀螺仪 topic/设备。  
+`/dev/uorb/sensor_gps_factory0` | 工厂测试使用的 GNSS 传感器 topic。  
+  
+`/dev/uorb/*` 是消息总线接口，不等同于寄存器直通。固件还会把 uORB 时序统计写到 `/data/uorb/` 或 `/data//uorb_timings%u.txt`，用于诊断传感器数据链路。
+
+## 通信、蓝牙与 GNSS
+节点 | 用途  
+---|---  
+`/dev/ttyBT`、`/dev/ttyBT0` | 蓝牙控制器/协议栈使用的串行通道。  
+`/dev/ttyGNSS` | GNSS 模块串行通道。  
+`/dev/tun` | TUN 三层虚拟网络设备，供用户态网络隧道或协议适配使用。  
+  
+这些设备通常由蓝牙、定位和网络系统服务持有。即使文件权限允许，第二个进程直接打开同一串口也可能破坏协议状态。
+
+## 电源、振动、NFC 与其他硬件
+节点 | 用途  
+---|---  
+`/dev/charge/batt_charger` | 电池充电器控制与状态接口。  
+`/dev/charge/batt_gauge` | 硬件电量计接口。  
+`/dev/charge/soft_gauge` | 软件电量估算器接口。  
+`/dev/lra0` | 首个 LRA 线性马达/触觉反馈设备。  
+`/dev/nfc_sn100` | NXP SN100 系列 NFC 控制器设备。  
+`/dev/thn31/` | THN31 NFC/安全外设驱动目录；内部子节点名由驱动运行时创建。  
+`/dev/rtc`、`/dev/rtc0` | 实时时钟接口与首个 RTC 实例。  
+`/dev/sst` | 安全存储（secure storage）接口，可能承载密钥或受保护状态。  
+`/dev/watchdog0` | 首个硬件 watchdog。打开后若未按协议喂狗，系统可能被复位。  
+  
+`/dev/charge/` 和 `/dev/thn31/` 也以目录前缀形式出现在固件中，说明调用方会拼接子节点；上表只列出了固件中可直接恢复的名称。
+
+## 动态节点名模板
+固件还保留了以下格式化字符串。它们不是字面存在的节点，而是驱动按实例号或 topic 名生成路径时使用的模板。
+
+模板 | 生成结果  
+---|---  
+`/dev/%s`、`/dev/%.24s` | 把驱动名拼到 `/dev/` 下；后者把名称限制为最多 24 个字符。无法仅凭模板确定最终设备。  
+`/dev/fb%d`、`/dev/fb%d.%d` | framebuffer 实例以及其平面/overlay 子实例，例如 `fb0`。  
+`/dev/i2c%d` | 带总线编号的 I²C 设备，例如 `i2c0`、`i2c1`。  
+`/dev/ram%d` | 编号 RAM disk，例如 `ram0`。  
+`/dev/rtc%d` | 编号 RTC，例如 `rtc0`。  
+`/dev/pts/%d`、`/dev/pts/%u` | 伪终端从设备编号。  
+`/dev/pty%d`、`/dev/pty%u` | 编号伪终端设备。  
+`/dev/ttyp%d`、`/dev/ttyp%u` | 另一套编号伪终端名称。  
+`/dev/ttyBT%d` | 编号蓝牙串行设备，例如 `ttyBT0`。  
+`/dev/ttyGNSS%d` | 编号 GNSS 串行设备。  
+`/dev/tmpb%06lx`、`/dev/tmpc%06lx` | 带 6 位十六进制后缀的临时块/字符设备名；后缀通常用于避免命名冲突，协议仍需从创建它的调用点确认。  
+`/dev/uorb/%s`、`/dev/uorb/%s%d` | 按 topic 名和实例号生成 uORB 节点。  
+`/dev/uorb/sensor_%s%s%d` | 按传感器类型、附加名称和实例号生成传感器 topic。  
+  
+因此，实机出现 `i2c0`、`rtc1` 或新的 `sensor_*` 并不算文档遗漏；它们属于相同模板的运行时实例。
+
+## 实机只读确认
+在有 shell 的设备上，可以先执行：
+```text
+
+
+ls -l /dev
+mount
+df -h
+cat /proc/partitions 2>/dev/null
+dmesg | grep -E 'nand|romfs|yaffs|littlefs|uorb|sensor|nfc|charge'
+
+```
+
+检查某个节点是否正在被挂载或占用：
+```text
+
+
+mount | grep '/dev/resource\|/dev/nand_data\|/dev/nv\|/dev/mode'
+fuser /dev/ttyGNSS 2>/dev/null
+
+```
+
+不同 shell 工具集可能没有 `grep`、`fuser` 或 `df -h`。这不影响节点本身，只需改用系统现有的只读命令。不要用 `cat /dev/nand_data` 来“查看内容”：它读取的是原始 YAFFS 分区，不是目录中的文件。

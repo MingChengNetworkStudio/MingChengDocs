@@ -1,0 +1,99 @@
+---
+title: "ROMFS /etc 总览"
+---
+
+p67tc 包含 AP、二级引导、工厂、OTA 和恢复环境五套独立 ROMFS；o63 本次 OTA 包中可直接提取 AP 与 OTA 两套。启动到哪个阶段，就使用该镜像内的 `/etc`。
+
+## 五套环境
+环境 | 主要职责 | 原始文件数  
+---|---|---  
+AP | 正常系统、穿戴服务和快应用运行环境 | p67tc 6；o63 6 个业务配置/脚本，另含 D-Bus 配置  
+BL2 | 启动决策、OTA 验证、工厂/恢复/AP 跳转 | 6  
+Factory | 产线检测、组装校准和工厂测试服务 | 4  
+OTA | 验证更新包并写入 BL2、Resource、AP 分区 | 6  
+Recovery | 恢复界面和恢复资源挂载 | 3  
+  
+同名文件不能直接互换。例如 AP 的 `rcS` 启动日常业务服务，BL2 的 `rcS` 决定下一阶段启动哪个镜像，OTA 的 `rcS` 则执行签名验证和刷写流程。
+
+## o63 的主要差异
+  * AP 增加 `dbus-1/system.conf` 与 `dbus-1/system.d/`，供系统 D-Bus 守护进程定义总线策略；
+  * AP 不含 p67tc 的 `miwear_product.json`、`md5test.txt`；产品能力更多来自拆分的 vendor/system/app 分区；
+  * `rc.sysinit` 分别挂载 `/dev/vendor`、`/dev/system`、`/dev/app`、`/dev/misc`、`/dev/i18n`、`/dev/font`、`/dev/watchface`、`/dev/quickapp`、`/dev/factory`；
+  * o63 将 `/dev/data` 以 FATFS/exFAT 挂载到 `/data`，将 `/dev/userlog` 挂到 `/log`，不沿用 p67tc 的 `/dev/nand_data` YAFFS 路径；
+  * `rcS` 增加 `dkf_iccoa` 与 `account`，分别支撑数字车钥匙和 `service.miaccount`。
+
+各子页保留 p67tc 原始文件逐项解释；遇到上述 o63 差异时以本节和接口页的机型可用性为准。
+
+## 启动关系
+
+```text
+
+flowchart TD
+    BL2["BL2 /etc"] --> CHECK{"复位原因与系统状态"}
+    CHECK -->|正常| AP["AP /etc"]
+    CHECK -->|未完成工厂流程| FACTORY["Factory /etc"]
+    CHECK -->|恢复模式| RECOVERY["Recovery /etc"]
+    CHECK -->|OTA 包| OTA["OTA /etc"]
+    OTA -->|更新完成后重启| BL2
+
+```
+
+## 文件目录
+### AP
+  * [build.prop](/docs/vela/appendix/firmware/system_etc_ap_build-prop)
+  * [font_config.json](/docs/vela/appendix/firmware/system_etc_ap_font-config-json)
+  * [dbus-1/system.conf](/docs/vela/appendix/firmware/system_etc_ap_dbus-system-conf)
+  * [dbus-1/system.d](/docs/vela/appendix/firmware/system_etc_ap_dbus-system-d)
+  * [miwear_product.json](/docs/vela/appendix/firmware/system_etc_ap_miwear-product-json)
+  * [md5test.txt](/docs/vela/appendix/firmware/system_etc_ap_md-5-test-txt)
+  * [init.d/rc.sysinit](/docs/vela/appendix/firmware/system_etc_ap_rc-sysinit)
+  * [init.d/rcS](/docs/vela/appendix/firmware/system_etc_ap_rcs)
+
+### BL2
+  * [build.prop](/docs/vela/appendix/firmware/system_etc_bl-2_build-prop)
+  * [key.avb](/docs/vela/appendix/firmware/system_etc_bl-2_key-avb)
+  * [recovery_reset.sh](/docs/vela/appendix/firmware/system_etc_bl-2_recovery-reset)
+  * [md5test.txt](/docs/vela/appendix/firmware/system_etc_bl-2_md-5-test-txt)
+  * [init.d/rc.sysinit](/docs/vela/appendix/firmware/system_etc_bl-2_rc-sysinit)
+  * [init.d/rcS](/docs/vela/appendix/firmware/system_etc_bl-2_rcs)
+
+### Factory
+  * [build.prop](/docs/vela/appendix/firmware/system_etc_factory_build-prop)
+  * [md5test.txt](/docs/vela/appendix/firmware/system_etc_factory_md-5-test-txt)
+  * [init.d/rc.sysinit](/docs/vela/appendix/firmware/system_etc_factory_rc-sysinit)
+  * [init.d/rcS](/docs/vela/appendix/firmware/system_etc_factory_rcs)
+
+### OTA
+  * [build.prop](/docs/vela/appendix/firmware/system_etc_ota_build-prop)
+  * [key.avb](/docs/vela/appendix/firmware/system_etc_ota_key-avb)
+  * [recovery_reset.sh](/docs/vela/appendix/firmware/system_etc_ota_recovery-reset)
+  * [md5test.txt](/docs/vela/appendix/firmware/system_etc_ota_md-5-test-txt)
+  * [init.d/rc.sysinit](/docs/vela/appendix/firmware/system_etc_ota_rc-sysinit)
+  * [init.d/rcS](/docs/vela/appendix/firmware/system_etc_ota_rcs)
+
+### Recovery
+  * [md5test.txt](/docs/vela/appendix/firmware/system_etc_recovery_md-5-test-txt)
+  * [init.d/rc.sysinit](/docs/vela/appendix/firmware/system_etc_recovery_rc-sysinit)
+  * [init.d/rcS](/docs/vela/appendix/firmware/system_etc_recovery_rcs)
+
+## rc.sysinit 与 rcS 的区别
+本固件中可以按以下方式理解：
+
+  * `rc.sysinit`：先建立运行环境，重点是挂载文件系统、属性/数据库守护进程和基础日志；
+  * `rcS`：在挂载完成后启动该镜像真正负责的业务，或决定下一阶段启动目标。
+
+脚本没有 shebang，由固件 init/NSH 以系统 shell 语法解释。`set +e` 表示命令失败后继续；`set -e` 表示后续命令失败时终止当前脚本。后台符号 `&` 让 daemon 启动后脚本继续执行。
+
+## 关于 `_romfs_manifest.tsv`
+各提取目录里的 `_romfs_manifest.tsv` 由本项目的 ROMFS 解包脚本生成，记录 inode 偏移、节点类型、文件长度和解包路径。它不在原始 ROMFS 中，不会被设备读取，也不是系统配置。重打包时不要把它放回 `/etc`。
+
+节点类型中常见值：
+
+类型 | 含义  
+---|---  
+`1` | 目录  
+`2` | 普通文件  
+`3` | 符号链接  
+  
+## 修改边界
+这些 `/etc` 位于 ROMFS，运行时通常只读。临时行为优先通过 `/data`、属性或手动启动服务验证；永久修改需要重建对应 ROMFS、保持镜像尺寸和对齐，并处理 AP/BL2/OTA 的校验或签名链。

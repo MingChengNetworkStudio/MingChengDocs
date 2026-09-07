@@ -1,0 +1,62 @@
+---
+title: package（模块加载）
+---
+
+## 概览
+
+`package` 与全局函数 `require` 一起构成 Lua 的模块系统。
+在嵌入式/定制运行时中，模块搜索路径与加载器可能被替换或裁剪，因此这是一个“实现差异很大”的库。
+
+## 核心概念
+
+- `require("name")`：加载模块（只会加载一次），并返回模块返回值
+- `package.loaded[name]`：已加载模块缓存表
+- `package.preload[name]`：预加载表（可把 loader 函数放在这里）
+
+## 字段/函数速查
+
+| 成员 | 类型 | 说明 | 可用性 |
+|---|---|---|---|
+| `require(name)` | `function` | 加载模块（全局函数） | `可能不可用（实现相关）` |
+| `package.loaded` | `table` | 模块缓存 | `常见可用` |
+| `package.preload` | `table` | 预加载 loader | `常见可用` |
+| `package.path` | `string` | Lua 模块搜索路径 | `可能不可用（实现相关）` |
+| `package.cpath` | `string` | C 模块搜索路径 | `可能不可用（通常被禁用）` |
+| `package.searchers` | `table` | 搜索器列表（加载链路） | `可能不可用（实现相关）` |
+| `package.searchpath(name, path[, sep[, rep]])` | `function` | 在路径模板里查找模块文件 | `可能不可用（无文件系统/裁剪）` |
+| `package.loadlib(libname, funcname)` | `function` | 动态加载 C 库 | `可能不可用（通常被禁用）` |
+| `package.config` | `string` | 平台相关配置字符串 | `可能不可用（实现相关）` |
+
+<Callout type="info">
+某些旧实现可能使用 `package.loaders`（而非 `package.searchers`）；请以运行时为准。
+</Callout>
+
+## 示例：使用 preload 注入模块（离线/无文件系统时常用）
+
+```lua
+if package and type(package.preload) == "table" then
+  package.preload["mymod"] = function
+    local M = {}
+    function M.hello print("hi") end
+    return M
+  end
+end
+
+local m = require("mymod")
+m.hello
+```
+
+## 兼容性建议
+
+- 不要假设存在可用的 `package.path` 文件搜索；很多设备侧模块来自“内置注册”或“打包资源”。
+- 若发现 `require` 行为异常，先检查 `package.loaded`，以及 `package.searchers`（若存在）来定位加载链路。
+
+### 社区补充（洛汐文档库）
+
+- 洛汐文档库确认 Vela 表盘宿主提供全局 `require(name)`，以及 `package.config`、`cpath`、`loaded`、`loadlib`、`path`、`preload`、`searchers`、`searchpath` 共 8 个 `package` 成员。
+- **动态库加载已关闭**：`package.loadlib` 虽然被注册，但固件关闭了动态库加载，调用会返回 `"dynamic libraries not enabled"`，不能用它加载 `.so`。**厂商模块由宿主静态放入 `package.preload`**——这与本篇“使用 preload 注入模块”的示例一致，是设备侧模块分发的主要方式。
+
+## 参考来源：官方 docs-lua / 洛汐文档库
+
+- 官方 Lua 5.4 参考手册·标准库：[lua.org/manual/5.4/manual.html#6](https://www.lua.org/manual/5.4/manual.html#6)
+- 洛汐文档库《Lua 5.4 标准库》：[docs.luoxe.cn/docs/vela/lua/standard-library](https://docs.luoxe.cn/docs/vela/lua/standard-library/)

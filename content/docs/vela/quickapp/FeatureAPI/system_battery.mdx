@@ -1,0 +1,124 @@
+---
+title: "system.battery 电池状态"
+---
+
+> 获取设备当前的充电状态与剩余电量。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.battery` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.battery" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import battery from '@system.battery'
+// 或
+const battery = require('@system.battery')
+// 本仓库运行时/测试中使用的写法
+const battery = require('system.battery')
+```
+
+## 功能概述
+
+本 Feature 提供 `getStatus` 方法，用于获取当前设备的电量信息：查询设备电池是否正在充电以及当前电量比例。典型场景包括电量展示、低电量提醒、充电状态提示等。
+
+底层通过 NuttX uORB 订阅 `battery_state` topic（由系统健康管理服务 healthd / 充电管理服务发布，数据来自电池 gauge/charger 驱动），读取最近一次电池状态后立即退订，属于**单次查询**（不会持续监听电量变化；持续监听可使用 `@system.event` 中的电池相关事件）。
+
+## API
+
+### battery.getStatus(params)
+
+获取电池充电状态与电量。回调风格（success/fail/complete），无返回值，JIDL 未定义 Promise 形式。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 是 | - | 成功回调，参数为 `getStatusRet` |
+| fail | function | 否 | `null` | 失败回调 `fail(data: string, code: number)` |
+| complete | function | 否 | `null` | 完成回调，无参数（JIDL `complete_cb` 声明为无参），成功或失败都会触发 |
+
+> 官方标准文档描述：`success` / `fail` / `complete` 三个回调均标注为非必填。
+
+**成功回调参数（getStatusRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| charging | boolean | 是否正在充电：底层 `battery_state.state == 1` 时为 `true`（1：充电中，0：未充电，2：故障） |
+| level | number（double） | 电量比例，范围 **0.0 ~ 1.0**、分辨率 0.1（如 `0.9` 表示约 90%）；Native 由底层 0–100 的百分比电量经 `round(level/10)/10` 量化得到 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 200 | `orb_subscribe battery_state failed` | 订阅电池状态 uORB topic 失败（系统电池服务不可用） |
+| 200 | `orb_copy battery_state failed` | 读取电池状态数据失败 |
+
+> 失败路径同样会触发 `complete` 回调。实现未定义其他固定错误码。
+
+**示例**
+
+```js
+const battery = require('system.battery')
+
+battery.getStatus({
+  success: function (ret) {
+    console.log('charging:', ret.charging)
+    console.log('level:', ret.level) // 0.0 ~ 1.0
+    console.log('percent:', Math.round(ret.level * 100) + '%')
+  },
+  fail: function (data, code) {
+    console.log('getStatus fail', code, data)
+  },
+  complete: function  {
+    console.log('getStatus complete')
+  }
+})
+```
+
+## 注意事项
+
+- **单次查询**：`getStatus` 内部执行 `orb_subscribe` → `orb_copy` → `orb_unsubscribe`，只读取一次最新状态后立即退订，不会持续回调；需要监听电量/充放电变化请使用事件类 Feature（如 `usual.event.BATTERY_CHANGED`、`usual.event.CHARGING`、`usual.event.DISCHARGING`）。
+- **电量取值范围**：JS 侧 `level` 为 0.0–1.0 的小数（Native 对底层 0–100 百分比做 `round(level/10)/10` 量化，分辨率 0.1），展示为百分比时可 `Math.round(level * 100)`。
+- **charging 判定**：仅当底层电池状态 `state == 1`（充电中）时为 `true`；未充电（0）与故障（2）均为 `false`。
+- **依赖**：依赖系统 uORB `battery_state` topic（定义见 `openvela/frameworks/system/topics/include/system/state.h`），该 topic 由系统电池服务（healthd/charger 管理）发布；设备无电池驱动/服务时会走 `fail` 回调（code 200）。
+- JIDL 中 `fail`、`complete` 默认为 `null`（可不传）；`complete` 回调在 JIDL 中声明为无参回调。
+
+## 机型支持明细
+
+> 以下为官方标准文档公布的机型支持情况（openvela 开源版本是否可用以实际固件/Native 实现为准）。
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

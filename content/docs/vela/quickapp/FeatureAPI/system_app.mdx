@@ -1,0 +1,269 @@
+---
+title: "system.app 应用上下文"
+---
+
+> 提供应用信息查询、能力可用性查询、退出应用以及动态加载 Feature 库等应用级能力。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.app` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（官方文档：接口无需声明） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import app from '@system.app'
+// 本仓库运行时/测试中使用的写法
+const app = require('system.app')
+```
+
+## 功能概述
+
+`system.app` 提供应用上下文相关能力：`getInfo` 返回应用包名、名称、版本、图标、日志级别、来源等信息（Native 取自应用 manifest：`QApplicationGetManifest` + `QAppManifestGetAppName`/`GetVersion`/`GetVersionCode`/`GetLogLevel`/`GetIconPath`，包名取自 `QApplicationGetPackageName`）；`canIUse` 查询某个 Feature/接口（或组件能力）在当前平台是否可用（Native 经 `QApplicationHasFeature` / `GUIWidgetContextCanIUse` 判断）；`terminate` 退出当前应用（Native 为 `QApplicationSendExitEvent`，向应用发送退出事件）；`loadLibrary` 按名称动态加载 Feature 库（Native 为 `FeatureRequire`，用于加载 wasm feature）。
+
+本模块**全部为同步方法**：生成代码中方法均无 success/fail 回调、无 Promise，`getInfo`/`canIUse` 的结果通过返回值直接给出。
+
+## API
+
+### app.getInfo
+
+获取当前应用的信息。
+
+**参数**
+
+无。
+
+**返回值（AppInfo 对象）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| packageName | string | 应用包名（Native `QApplicationGetPackageName`） |
+| name | string | 应用名称（Native `QAppManifestGetAppName`，取自 manifest） |
+| versionName | string | 应用版本名（Native `QAppManifestGetVersion`） |
+| versionCode | number | 应用版本号（整数，Native `QAppManifestGetVersionCode`） |
+| icon | string | 应用图标路径（Native `QAppManifestGetIconPath`） |
+| logLevel | string | 日志级别（Native `QAppManifestGetLogLevel`） |
+| source | object（`AppSource`） | 应用来源信息，见下方 [AppSource](#appsource) |
+
+**示例**
+
+```js
+const app = require('system.app')
+
+var info = app.getInfo
+console.log('包名：', info.packageName)
+console.log('应用名：', info.name)
+console.log('版本：', info.versionName, info.versionCode)
+console.log('图标：', info.icon)
+console.log('日志级别：', info.logLevel)
+console.log('来源：', info.source)
+```
+
+官方示例——直接序列化打印整个信息对象：
+
+```js
+console.log(JSON.stringify(app.getInfo))
+// 典型输出：
+// {
+//   "packageName": "com.example.demo",
+//   "name": "demo",
+//   "versionName": "1.0.0",
+//   "versionCode": 1,
+//   "icon": "/common/logo.png",
+//   "logLevel": "debug",
+//   "source": { "packageName": "", "type": "shortcut" }
+// }
+```
+
+仓库示例（`packages/apps/wearable/vela-sample/src/interface/basic/app/index.ux`）：
+
+```js
+const info = app.getInfo
+this.packageName = info.packageName
+this.appName = info.name          // 注意：返回字段名为 name，不是 appName
+this.versionName = info.versionName
+this.versionCode = info.versionCode
+```
+
+> 注：快应用联盟标准接口的 `getInfo` 在部分平台为回调风格（`success`/`fail`/`complete`），且应用名字段名为 `appName`；本引擎为**同步返回**、字段名为 `name`。标准快应用接口语义以实际引擎版本为准。
+
+### app.canIUse(type)
+
+查询当前平台是否支持某个 Feature、某个 Feature 的指定方法，或组件的某项能力。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | string | 是 | 无 | 要查询的接口名/能力名，格式见下方（Native 经 `QApplicationHasFeature` / `GUIWidgetContextCanIUse` 判断） |
+
+**入参格式**（官方标准文档）：
+
+查询 Feature 接口：
+
+```js
+// 查询某个 feature 是否支持
+'@${featureName}'              // 如 '@system.router'
+// 查询 feature 下的某个方法是否支持
+'@${featureName}.${method}'    // 如 '@system.router.push'
+```
+
+查询组件能力（type 取值 `'attr'`、`'style'`、`'method'`，分别对应组件的属性、样式、方法）：
+
+```js
+// 查询组件是否支持
+'${componentName}'                       // 如 'scroll'
+// 查询组件下的属性/样式/方法是否支持
+'${componentName}.${type}.${name}'       // 如 'scroll.attr.scroll-x'
+```
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | boolean | `true` 表示支持，`false` 表示不支持 |
+
+**示例**
+
+```js
+const app = require('system.app')
+
+// 仓库示例：packages/apps/wearable/vela-sample/src/interface/basic/app/index.ux
+var routerSupport = app.canIUse('@system.router')        // 是否支持 system.router
+var pushSupport = app.canIUse('@system.router.push')     // 是否支持 router.push 方法
+console.log('router 支持：', routerSupport)
+console.log('router.push 支持：', pushSupport)
+
+// 官方示例：能力判断后再调用
+if (app.canIUse('@system.router.push')) {
+  // 可以使用 @system.router.push
+}
+if (app.canIUse('scroll')) {
+  // 可以使用 scroll 组件
+}
+if (app.canIUse('scroll.attr.scroll-x')) {
+  // 可以使用 scroll 组件的 scroll-x 属性
+}
+```
+
+### app.terminate
+
+退出当前应用。Native 调用 `QApplicationSendExitEvent` 向应用发送退出事件，应用走退出流程（页面/应用生命周期回调后结束）。
+
+**参数**
+
+无。
+
+**返回值**
+
+无（`undefined`）。
+
+**示例**
+
+```js
+const app = require('system.app')
+
+// 仓库示例：24count、settings、calendar、todolist、calculator 等应用均这样退出
+app.terminate
+```
+
+### app.loadLibrary(name)
+
+按名称动态加载（require）一个 Feature 库/动态库。Native 通过 Feature 管理器的 `FeatureRequire` 加载，引擎日志为 `[FEATURE] require wasm feature '<name>'!`；当 Feature 管理器不可用时输出错误日志 `[FEATURE] FeatureManagerHandle is null!`。
+
+> 官方标准文档描述：`loadLibrary` 用于"加载动态库，需要与厂商合作"，返回值为动态库加载结果，加载得到的对象可监听 `js_task_callback` 等回调事件。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| name | string | 是 | 无 | 要加载的 Feature/动态库名称 |
+
+**返回值**
+
+加载结果由 Native `FeatureRequire` 给出，具体返回形态未在开源代码中暴露，以实际引擎版本为准。
+
+**示例**
+
+```js
+const app = require('system.app')
+
+app.loadLibrary('some.wasm.feature')
+```
+
+官方示例——加载厂商合作动态库并监听回调：
+
+```js
+import app from '@system.app'
+const testApp = app.loadLibrary('test_app')
+
+testApp.on('js_task_callback',  => {
+  // callback action
+})
+```
+
+> 注：`loadLibrary` 为 OpenVela 引擎扩展接口（主要用于按需加载 wasm feature），快应用联盟标准接口中无对应方法；仓库内暂无 JS 侧调用示例，以实际引擎版本为准。
+
+## 数据结构
+
+### AppInfo
+
+`getInfo` 的返回对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| packageName | string | 应用包名 |
+| name | string | 应用名称 |
+| versionName | string | 应用版本名 |
+| versionCode | number | 应用版本号（整数） |
+| icon | string | 应用图标路径 |
+| logLevel | string | 日志级别 |
+| source | AppSource | 应用来源信息 |
+
+### AppSource
+
+`AppInfo.source`，描述应用来源。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| packageName | string | 来源方包名（一级来源：调起本应用的宿主/来源应用包名） |
+| type | string | 来源类型（二级来源）。官方标准文档列举的取值：`shortcut`（快捷方式）、`push`（推送）、`url`、`barcode`（扫码）、`nfc`、`bluetooth`、`other` |
+
+> `source` 的填充规则未在开源代码中暴露，按快应用联盟标准接口语义描述，以实际引擎版本为准。
+
+## 注意事项
+
+- **全部方法均为同步调用**：内置 JIDL 生成代码中没有任何 success/fail/complete 回调或 Promise，直接使用返回值即可。
+- **字段名是 `name` 不是 `appName`**：本引擎 `getInfo` 返回的应用名称字段为 `name`（仓库 vela-sample 示例实证）；快应用联盟标准文档中字段名为 `appName`，从标准文档迁移代码时需注意。
+- **`canIUse` 的参数形式**：支持 `'@system.xxx'`（整个模块）、`'@system.xxx.method'`（模块下具体方法）两种 Feature 粒度；官方标准文档还支持组件查询（`'scroll'`、`'scroll.attr.scroll-x'` 等），返回布尔值。
+- **`terminate` 无参数**：调用后应用进入退出流程（Native 发送 `QAPP_EVENT_EXIT` 类退出事件）；页面路由回退请使用 `system.router` 的 `back`，不要用 `terminate` 代替页面返回。
+- **`loadLibrary` 为扩展接口**：面向 wasm feature / 厂商合作动态库的按需加载，普通页面开发一般不需要使用；Feature 管理器缺失时仅输出 `[FEATURE] FeatureManagerHandle is null!` 日志。
+- 该 Feature 由引擎构建配置 `CONFIG_FEATURE_SYSTEM_APP` 编入预编译库 libquickappfeatures，应用侧无需在 manifest 中额外声明权限。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

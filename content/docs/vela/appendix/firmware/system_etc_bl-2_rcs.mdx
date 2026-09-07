@@ -1,0 +1,67 @@
+---
+title: "BL2 rcS"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 2370 字节  
+SHA-256 |  `b65efc082cec87cad53ffcf3c30e6cbf627853a0be604719d4857e2db5f53831`  
+阶段 | 启动目标选择与 OTA 引导  
+  
+这是五套脚本中最关键的一份。它根据复位原因、OTA 状态、恢复标志和工厂完成状态决定启动 OTA、Recovery、Factory 还是正常 AP。
+
+## 调试设置
+  * `set +e`：命令失败后继续；
+  * `set -x`：把执行的命令展开输出到日志，便于分析引导失败。
+
+## 复位原因处理
+reset cause | 动作  
+---|---  
+`cpu_soft_reset(restore)` | 执行 `recovery_reset.sh` 格式化 `/data`  
+`cpu_soft_reset(factory)` | 同样格式化 `/data`  
+`cpu_soft_reset(bootloader)` | 调用厂商 `rb` 工具后重启  
+  
+`rb -f /dev --skip_prefix vela_ --skip_suffix .bin` 的实现不在当前开源材料中。从参数只能确认它针对 `/dev` 并过滤特定名称，不能安全地把它解释成普通删除或刷写命令。
+
+## OTA 包探测
+如果 `/data/ota.zip` 存在，BL2 会：
+
+  1. 以 zipfs 挂载到 `/ota`；
+  2. 读取 `persist.ota.inprocess`；
+  3. 非更新中状态会清零 `persist.bl2.ota.trytimes`；
+  4. 更新中则增加重试计数；超过 5 次时清理 OTA 文件和状态并重启。
+
+这套计数避免设备反复启动失败的 OTA 环境形成永久循环。
+
+## 启动 OTA 环境
+当 reset cause 为 recovery，或 `persist.ota.inprocess=1` 时：
+```text
+
+
+avb_verify /ota/vela_ota.bin /etc/key.avb
+cp -f /ota/vela_ota.bin /data/vela_ota.bin
+boot /data/vela_ota.bin
+
+```
+
+只有 AVB 验证成功才把 OTA 镜像复制到 `/data` 并启动。失败会复位预检查状态、标记 `persist.ota_fail=1`、删除 OTA ZIP 并重启。
+
+## Recovery 与 Factory 分支
+条件 | 动作  
+---|---  
+`boot_reset_flag=1` | 挂载 `/resource`，启动 `/resource/prebuild/vela_recovery.bin`  
+`ro.factory.finished != 1` | 挂载 `/resource`，启动 `/resource/prebuild/vela_factory.bin`  
+  
+`miwear_recovery_boot` 在读取 `boot_reset_flag` 前运行，可能负责更新恢复状态或对接恢复服务。
+
+## 正常 AP 分支
+没有命中前述分支时，脚本强制卸载 `/data`，打印 `System Mode (AP)`，随后执行无参数 `boot`。BL2 由此把控制权交给默认 AP 分区。
+
+## 可修改的启动策略
+  * 修改 `boot_reset_flag` 可以请求 Recovery，但具体属性存储和清除时机由 `miwear_recovery_boot` 决定；
+  * 修改 `ro.factory.finished` 可能强制进入 Factory；
+  * 放置 `/data/ota.zip` 只会触发探测，仍必须通过 ZIP/AVB 验证；
+  * 删除 OTA 状态前应同时理解 `persist.ota.inprocess`、`persist.ota.precheck.finished` 和 retry 次数，避免半更新状态。
+
+永久修改该脚本需要重建 BL2 ROMFS；BL2 是启动链关键部分，风险高于修改 AP。

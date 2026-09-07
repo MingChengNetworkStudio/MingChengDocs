@@ -1,0 +1,161 @@
+---
+title: Lua 表盘结构与生命周期
+description: 表盘目录布局、main.lua 入口、生命周期与性能建议
+---
+
+推荐把脚本与资源放在同一表盘目录：
+
+```text
+mywatchface/
+├── main.lua
+└── asset/
+    ├── background.bin
+    └── second.bin
+```
+
+## 目录布局
+
+表盘宿主可注入 `SCRIPT_PATH`。使用它可避免把安装目录写死：
+
+```lua
+local ROOT = SCRIPT_PATH
+local function image(name)
+  return ROOT .. "asset/" .. name
+end
+```
+
+部分预装表盘直接使用 `/watchface/lua/{name}/asset/`。第三方表盘应优先使用宿主提供的路径。
+
+## 入口约定
+
+入口模块返回一个 table，并提供 `init(style)`：
+
+```lua
+local lvgl = require("lvgl")
+local ui = {}
+
+function ui.init(style)
+  local root = lvgl.Object(nil, {
+    w = lvgl.HOR_RES, h = lvgl.VER_RES,
+    bg_color = 0, bg_opa = 0,
+    border_width = 0, pad_all = 0,
+  })
+  root:clear_flag(lvgl.FLAG.SCROLLABLE)
+  root:add_flag(lvgl.FLAG.EVENT_BUBBLE)
+  ui.root = root
+  return root
+end
+
+return ui
+```
+
+`style` 由表盘配置传入，可作为主题目录名或颜色方案标识。
+
+## 控件包装模式
+
+复杂表盘可把一组对象包装为普通 Lua table：
+
+```lua
+local function ImageComponent(root, src, x, y)
+  local component = { childs = {} }
+  local img = root:Image { src = src, x = x, y = y }
+  component.childs[1] = img
+  return component
+end
+```
+
+这种模式便于批量切换主题、暂停动画或释放对象。`childs` 不是 LVGL 固有字段，只是脚本自己的容器。
+
+## 页面暂停与恢复
+
+```lua
+local timers = {}
+local subscriptions = {}
+local animations = {}
+
+function pageOnPause
+  for _, timer in ipairs(timers) do timer:pause end
+  for _, token in ipairs(subscriptions) do dataman.pause(token) end
+  for _, anim in ipairs(animations) do anim:remove end
+  animations = {}
+end
+
+function pageOnResume
+  for _, timer in ipairs(timers) do timer:resume end
+  for _, token in ipairs(subscriptions) do dataman.resume(token) end
+end
+```
+
+进入表盘编辑页时，可用 `activity.isShown` 判断：
+
+```lua
+local editing = activity.isShown {
+  appID = activity.APPID.WATCHFACE,
+  pageID = 2,
+}
+```
+
+## 编辑状态轮询
+
+```lua
+local lastEditing = false
+
+local editTimer = lvgl.Timer {
+  period = 200,
+  repeat_count = -1,
+  cb = function
+    local editing = activity.isShown {
+      appID = activity.APPID.WATCHFACE,
+      pageID = 2,
+    }
+    if editing ~= lastEditing then
+      if editing then pageOnPause else pageOnResume end
+      lastEditing = editing
+    end
+  end,
+}
+```
+
+## 错误隔离
+
+加载可选模块时使用 `pcall`：
+
+```lua
+local ok, vibrator = pcall(require, "vibrator")
+if ok then
+  vibrator.start(vibrator.type.WATCH_FACE)
+end
+```
+
+回调中也可用 `xpcall` 保留堆栈：
+
+```lua
+local function safeCall(fn, ...)
+  return xpcall(fn, debug.traceback, ...)
+end
+```
+
+## 性能建议
+
+- 不要每帧重新创建控件；创建一次后用 `obj:set{}` 更新。
+- 高频数据只更新发生变化的属性。
+- 页面暂停后停止动画与高频 Timer。
+- 图片优先使用设备支持的 `.bin` 资源，避免运行时解码大图。
+- 列表和回调中不要形成 `Lua table → userdata → callback → table` 的长期循环引用。
+
+## 机型可用性
+
+| Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|---|---|
+| ✅ | ✅ |
+
+## 获取源代码
+
+- [社区表盘入门与约定](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua/intro)
+- [社区 Lua 表盘示例接口](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua)
+
+---
+
+## 参考来源
+
+- 洛汐文档库 https://docs.luoxe.cn/ （lua_watchface-development.md）

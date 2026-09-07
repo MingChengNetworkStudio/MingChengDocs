@@ -1,0 +1,14 @@
+{
+  "title": "Feature API",
+  "pages": [
+    "system_router", "system_app", "system_event", "system_prompt", "system_internal.messagecenter",
+    "system_device", "system_settings", "system_configuration", "locale", "system_brightness", "system_vibrator", "system_battery", "system_internal.power",
+    "system_fetch", "system_request", "system_network", "system_geolocation", "system_interconnect", "system_mqttmessage", "system_mqtt", "system_exchange", "service_wechat", "service_miaccount",
+    "system_bluetooth", "system_bluetooth.ble",
+    "system_audio", "system_record", "system_volume", "system_media.session", "system_media", "system_media.audio",
+    "system_file", "system_storage", "system_zip", "system_zlib", "system_crypto", "system_cipher", "system_digitalkey",
+    "system_sensor", "service_health", "system_schedule",
+    "system_ai.speech", "system_folme",
+    "Error", "event_test"
+  ]
+}

@@ -1,0 +1,27 @@
+---
+title: "Vela 文件系统总览"
+---
+
+当前分析样本运行的是 NuttX/Vela 风格的单一根文件系统。启动脚本把只读资源分区、可写数据分区和少量配置分区挂到固定目录；驱动则把设备接口注册到 `/dev`。因此，固件镜像里能检索到某个路径，只能说明有代码会尝试访问它，实际节点仍取决于机型、启动阶段、内核配置和硬件初始化结果。
+
+## 启动时的主要挂载关系
+设备节点 | 挂载点 | 文件系统 | 用途  
+---|---|---|---  
+`/dev/resource` |  `/resource` | ROMFS | 应用资源、字体、语言包、表盘、恢复程序等只读资源  
+`/dev/nand_data` |  `/data` | YAFFS | 用户数据、应用数据库、日志、OTA 包和运行时状态  
+`/dev/nv` |  `/misc` | LittleFS | 小型持久化系统配置  
+`/dev/mode` |  `/mode` | LittleFS | 启动/工作模式状态  
+`/dev/nand_nv` |  `/wasted_nv` | YAFFS | BL2 阶段使用的另一块 NAND 持久区  
+  
+AP、Factory 与 Recovery 会用 `autoformat` 挂载 `/data`；文件系统损坏或首次启动时可能自动格式化。BL2/OTA 的 `recovery_reset.sh` 则明确用 `forceformat` 重建 `/data`，会删除其中全部数据。
+
+## 文档
+  * [/dev 设备节点](/docs/vela/appendix/firmware/system_filesystem_dev)：分区、终端、日志、输入、传感器、通信和硬件驱动节点。
+  * [/data 目录结构](/docs/vela/appendix/firmware/system_filesystem_data)：快应用沙箱、原生应用数据库、健康数据、日志、OTA 与恢复文件。
+  * [ROMFS /etc 总览](/docs/vela/appendix/firmware/system_etc)：各启动环境的挂载与服务启动脚本。
+
+## 路径判读规则
+  1. 启动脚本中的 `mount`、`dd`、`losetup` 路径可直接确定用途。
+  2. 二进制字符串中的路径表示对应模块包含访问逻辑，不保证该功能在本机当前系统配置下启用。
+  3. `/dev` 是动态设备文件系统，不是固件包中预先存放的一组普通文件。
+  4. `/data` 是可写分区，实际目录会随使用功能、配对状态和升级历史逐步创建。

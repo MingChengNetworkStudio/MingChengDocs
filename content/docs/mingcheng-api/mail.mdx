@@ -1,148 +1,90 @@
 ---
 title: 邮件服务
 icon: Mail
-description: 邮箱概览、邮件列表、发送邮件等功能
+description: 邮箱概览、邮件列表/搜索、收发邮件、文件夹、草稿与附件
 ---
 
-> 模块类型: system | 权限等级: verify
+> 模块类型：service ｜ 基础路径：`/api/v2/mail` ｜ 鉴权：设备 APIKey
+
 <Callout type="warn">
-需要应用启用`qweather`服务
+应用须在后台启用 `mail` 服务（否则 403）。
 </Callout>
-<Callout type="warn">
-仍在调试开发，尽情期待
+
+设备 App 内的邮件功能。**邮箱凭证（地址 / IMAP·SMTP 主机与授权码）由客户端每次请求携带，服务端不存储。**
+
+## 通用约定
+
+- **鉴权**：除附件下载 URL（令牌）与头像（公开）外，均为设备 APIKey（请求体 `Key` 或 `?key=`，路径含 `:appname`）。
+- **扣费**：仅 `/send` 扣请求配额；其余端点均 **noQuota**。
+- **公共 IMAP 请求体字段**：
+
+  | 字段 | 必填 | 说明 |
+  |---|---|---|
+  | `Key` | 是 | 设备 API Key |
+  | `email` | 是 | 邮箱地址 |
+  | `imapPass` | 是 | IMAP 密码 / 授权码 |
+  | `imapHost` | 是 | IMAP 服务器地址 |
+  | `imapPort` | 否 | IMAP 端口，默认 993 |
+
+- **响应信封**：成功 `{ "status":200, "result":<数据>, "message"? }`；附件类返回二进制流。
+- **SSRF**：IMAP / SMTP 主机不允许指向内网地址（400）。
+
+---
+
+## 读取邮件
+
+均为 `POST`、apikey、noQuota。
+
+| 路径 | 额外请求体字段 | 说明 / result |
+|---|---|---|
+| `/overview/:appname` | — | 邮箱概览（文件夹 / 未读等统计） |
+| `/list/:appname` | `start?`、`end?`、`folder?`、`textOverflow?`、`UTCoffset?` | 邮件摘要列表（分页） |
+| `/starred/:appname` | 同 list | 星标邮件列表 |
+| `/info/:appname` | `emailId`、`folder`、`Type?='json'`、`textOverflow?`、`UTCoffset?`、`markRead?=true` | 单封邮件完整内容（正文 / 附件列表 / 时间）；`markRead:false` 只预览不置已读 |
+| `/folders/:appname` | — | 邮箱文件夹列表 |
+| `/search/:appname` | `keyword`、`start?`、`end?`、`folder?`、`textOverflow?`、`UTCoffset?` | 关键词搜索结果 |
+
+<Callout type="info">
+分页用 `start` / `end`（而非页码）；`folder` 默认为 `INBOX`；`textOverflow` 控制正文截断长度。
 </Callout>
-## 邮箱概览
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/overview/:appname` |
-| **说明** | 获取邮箱文件夹列表及未读数 |
-
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `appname` | path | 是 | 应用名 |
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 邮箱地址 |
-| `imapPass` | body | 是 | IMAP 密码/授权码 |
-| `imapHost` | body | 是 | IMAP 服务器地址 |
-| `imapPort` | body | 否 | IMAP 端口 |
 
 ---
 
-## 邮件列表
+## 邮件操作
 
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/list/:appname` |
-| **说明** | 获取邮件列表 |
+均为 `POST`、apikey、noQuota。
 
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 邮箱地址 |
-| `imapPass` | body | 是 | IMAP 密码 |
-| `imapHost` | body | 是 | IMAP 服务器 |
-| `imapPort` | body | 否 | IMAP 端口 |
-| `page` | body | 否 | 页码 |
-| `pageSize` | body | 否 | 每页数量 |
-| `folder` | body | 否 | 文件夹名（默认 INBOX） |
-| `textOverflow` | body | 否 | 正文截断长度 |
+| 路径 | 请求体字段 | 说明 |
+|---|---|---|
+| `/flag/:appname` | `emailId`、`action`、`folder?` | 标记：`seen` / `unseen` / `flagged` / `unflagged` 等 |
+| `/delete/:appname` | `emailId`、`folder?` | 删除邮件 |
+| `/move/:appname` | `emailId`、`targetFolder`、`folder?` | 移动到文件夹 |
+| `/batch-flag/:appname` | `emailIds[]`、`action`、`folder?` | 批量标记 |
+| `/batch-move/:appname` | `emailIds[]`、`targetFolder`、`folder?` | 批量移动 |
+| `/batch-delete/:appname` | `emailIds[]`、`folder?` | 批量删除 |
 
 ---
 
-## 邮件详情
+## 文件夹管理
 
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/info/:appname` |
-| **说明** | 获取邮件详情 |
+均为 `POST`、apikey、noQuota。
 
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 邮箱地址 |
-| `imapPass` | body | 是 | IMAP 密码 |
-| `imapHost` | body | 是 | IMAP 服务器 |
-| `imapPort` | body | 否 | IMAP 端口 |
-| `emailId` | body | 是 | 邮件ID |
-| `Type` | body | 否 | 返回格式（默认 json） |
-| `textOverflow` | body | 否 | 正文截断长度 |
+| 路径 | 请求体字段 | 说明 |
+|---|---|---|
+| `/folder-create/:appname` | `folderName` | 新建文件夹 |
+| `/folder-rename/:appname` | `oldName`、`newName` | 重命名文件夹 |
+| `/folder-delete/:appname` | `folderName` | 删除文件夹 |
 
 ---
 
-## 获取文件夹列表
+## 草稿
 
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/folders/:appname` |
-| **说明** | 获取邮箱文件夹列表 |
+均为 `POST`、apikey、noQuota。
 
----
-
-## 设置邮件标记
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/flag/:appname` |
-| **说明** | 设置邮件已读/未读/标记状态 |
-
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 邮箱地址 |
-| `imapPass` | body | 是 | IMAP 密码 |
-| `imapHost` | body | 是 | IMAP 服务器 |
-| `emailId` | body | 是 | 邮件ID |
-| `action` | body | 是 | 操作：`seen` / `unseen` / `flagged` / `unflagged` |
-
----
-
-## 删除邮件
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/delete/:appname` |
-| **说明** | 删除指定邮件 |
-
----
-
-## 移动邮件
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/move/:appname` |
-| **说明** | 移动邮件到指定文件夹 |
-
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `targetFolder` | body | 是 | 目标文件夹 |
-
----
-
-## 搜索邮件
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `POST /api/v2/mail/search/:appname` |
-| **说明** | 搜索邮件 |
-
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `keyword` | body | 是 | 搜索关键词 |
-| `page` | body | 否 | 页码 |
-| `pageSize` | body | 否 | 每页数量 |
+| 路径 | 请求体字段 | 说明 |
+|---|---|---|
+| `/draft-save/:appname` | `sendto`、`title`、`text` 等（IMAP 凭证同公共字段） | 保存草稿 |
+| `/draft-delete/:appname` | `emailId` | 删除草稿 |
 
 ---
 
@@ -151,18 +93,26 @@ description: 邮箱概览、邮件列表、发送邮件等功能
 | 项目 | 内容 |
 |------|------|
 | **API** | `POST /api/v2/mail/send/:appname` |
-| **说明** | 发送邮件 |
+| **鉴权** | 设备 APIKey（**扣配额**） |
+| **说明** | 经设备自带 SMTP 发送邮件 |
 
-**参数：**
+**请求体：**
 
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 发件邮箱 |
-| `smtpPass` | body | 是 | SMTP 密码/授权码 |
-| `smtpHost` | body | 是 | SMTP 服务器 |
-| `smtpPort` | body | 否 | SMTP 端口 |
-| `body` | body | 是 | 邮件内容（to/subject/html/text/cc/bcc） |
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `Key`、`email` | 是 | 设备 Key、发件邮箱 |
+| `smtpHost` | 是 | SMTP 服务器地址 |
+| `smtpPass` | 是 | SMTP 密码 / 授权码 |
+| `smtpPort` | 否 | SMTP 端口（465 隐式 TLS / 其余 STARTTLS） |
+| `sendto` | 是 | 收件人 |
+| `title` | 否 | 邮件主题 |
+| `text` | 否 | 正文 |
+| `isHtml` | 否 | 正文是否为 HTML |
+| `cc`、`bcc` | 否 | 抄送 / 密送 |
+| `senderName` | 否 | 发件人昵称 |
+| `attachments` | 否 | 附件数组 `[{ "filename": "...", "content": "<base64>" }]` |
+
+**成功：** `{ "status": 200, "message": "邮件发送成功" }`。HTML 正文会经白名单清洗。
 
 ---
 
@@ -171,18 +121,10 @@ description: 邮箱概览、邮件列表、发送邮件等功能
 | 项目 | 内容 |
 |------|------|
 | **API** | `POST /api/v2/mail/verify/:appname` |
-| **说明** | 验证邮箱 IMAP/SMTP 配置是否正确 |
+| **鉴权** | 设备 APIKey（noQuota） |
+| **说明** | 测试 IMAP / SMTP 连通性 |
 
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `Key` | body | 是 | 设备 API Key |
-| `email` | body | 是 | 邮箱地址 |
-| `imapPass` | body | 否 | IMAP 密码 |
-| `imapHost` | body | 否 | IMAP 服务器 |
-| `smtpPass` | body | 否 | SMTP 密码 |
-| `smtpHost` | body | 否 | SMTP 服务器 |
+请求体含 `Key`、`email`，及可选的 `imap*` / `smtp*` 配置。
 
 **返回：**
 
@@ -195,3 +137,28 @@ description: 邮箱概览、邮件列表、发送邮件等功能
   }
 }
 ```
+
+---
+
+## 附件
+
+附件返回**二进制流**（非统一信封），提供两种方式：
+
+| 方式 | API | 鉴权 | 说明 |
+|---|---|---|---|
+| POST | `/api/v2/mail/attachment/:appname` | 设备 APIKey（noQuota） | 请求体 `emailId`、`attachmentIndex`、`folder?` + 公共 IMAP 字段，返回二进制流 |
+| GET | `/api/v2/mail/attachment/:appname/:emailId/:attachmentIndex?token=<令牌>` | 公开（凭令牌） | 供前端 `<img src>` / `<a href>` 直接引用 |
+
+<Callout type="info">
+GET 附件 URL 的 `token` 由 `/info` 返回的附件 URL 提供（AES-256-GCM 签名，绑定应用 / 邮箱 / 邮件 / 序号），过期或不匹配返回 401 / 403。这样无需在 URL 暴露 IMAP 凭证。
+</Callout>
+
+---
+
+## 头像
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/mail/avatar?email=<邮箱>` |
+| **鉴权** | 公开 |
+| **说明** | 302 跳转到 cravatar 头像（按邮箱 MD5） |

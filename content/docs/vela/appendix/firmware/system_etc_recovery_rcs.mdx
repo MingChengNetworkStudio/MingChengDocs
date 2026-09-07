@@ -1,0 +1,25 @@
+---
+title: "Recovery rcS"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 34 字节  
+SHA-256 |  `3d2adaba82e9f47a9235d0ef918836228c6e2ccefa357dda05e107a3af714cb9`  
+阶段 | Recovery 主程序启动  
+  
+完整脚本只有：
+```text
+
+
+set +e
+miwear_recovery_recovery &
+
+```
+
+`miwear_recovery_recovery` 是恢复模式主程序，负责恢复 UI、用户操作和与 BL2/OTA 状态的交互。字体、i18n、表盘资源和 `/data` 已由 `rc.sysinit` 准备。
+
+主程序放到后台后脚本结束，说明镜像 init 会继续维持系统，而不是把该进程作为前台 PID 1。若进程崩溃，脚本没有自动重启逻辑；是否有 watchdog 由系统其他部分决定。
+
+替换这一命令可以启动自定义恢复程序，但必须保证它能处理属性、重启原因和分区操作，否则可能失去正常 OTA/恢复入口。

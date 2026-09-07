@@ -1,0 +1,76 @@
+---
+title: Timer 定时器
+description: LVGL 定时器
+---
+
+## 构造
+
+```lua
+Timer(opts?: table) -> timer
+```
+
+## opts 参数
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `period` | integer | 周期（ms），省略或 `0` 则自动暂停 |
+| `paused` | integer/boolean | 是否暂停 |
+| `repeat_count` | integer | 重复次数，`-1` 为无限 |
+| `cb` | function | 回调，签名 `function(timer)` |
+
+## 实例方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `t:set(opts)` | 更新参数 |
+| `t:pause` | 暂停 |
+| `t:resume` | 恢复 |
+| `t:ready` | 立即触发一次回调 |
+| `t:delete` | 删除定时器 |
+
+## 示例
+
+```lua
+local t = Timer({
+  period = 500,
+  repeat_count = -1,
+  cb = function(timer)
+    print("tick", lvgl.tick_get)
+  end
+})
+t:resume
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+> 以下内容来自洛汐文档库《LVGL 辅助模块》：[docs.luoxe.cn/docs/vela/lua/lvgl-modules](https://docs.luoxe.cn/docs/vela/lua/lvgl-modules/)
+
+```lua
+local timer = lvgl.Timer {
+  period = 1000,
+  repeat_count = -1,
+  cb = function(timer)
+    print("tick")
+  end,
+}
+
+timer:pause
+timer:resume
+timer:set { period = 500 }
+timer:ready
+timer:delete
+```
+
+| 成员 | 说明 |
+| --- | --- |
+| `period` | 触发周期，毫秒 |
+| `repeat_count` | 剩余次数；`-1` 表示无限 |
+| `cb` | 定时回调 |
+| `pause` / `resume` | 暂停和恢复 |
+| `set` | 更新 `period`、`paused`、`repeat_count` 或 `cb` |
+| `ready` | 令定时器尽快执行一次 |
+| `delete` | 删除定时器 |
+
+参考来源：官方 docs-lua / 洛汐文档库

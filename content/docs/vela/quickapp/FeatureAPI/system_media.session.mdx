@@ -1,0 +1,299 @@
+---
+title: "system.media.session 媒体会话"
+---
+
+> 创建媒体会话控制器（controller），向系统中当前最活跃的媒体播放端发送播放/暂停/停止/切歌/音量控制命令，并接收控制结果与播放端状态变化事件。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.media.session` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import mediaSession from '@system.media.session'
+// 本仓库运行时/测试中使用的写法
+const mediaSession = require('system.media.session')
+```
+
+## 功能概述
+
+`system.media.session` 是媒体会话框架（Media Session）的**控制器（controller）**侧接口。媒体会话框架中，播放媒体的应用（如使用 `system.audio` 的播放器）注册为"被控端（controllee）"，控制类应用（手表控件、语音助手、蓝牙控制等）通过本模块创建"控制器"，向**当前最活跃的被控端**发送播放控制命令，并通过 `onEvent` 接收被控端回送的控制结果与元数据变化通知。
+
+Native 层通过 `media_session_*` 同步接口与 media session 服务通信；事件回调通过 `FeaturePost` 投递到 Feature 线程后再回调 JS（`onEvent` 收到的是 JSON 字符串）。会话对象在 JS 侧被回收时 Native 自动调用 `media_session_close` 释放。
+
+典型使用场景：设备控制中心/Launcher 上的媒体控制卡片、语音控制播放。
+
+## API
+
+### mediaSession.createSession(params)
+
+创建一个媒体会话控制器实例（Session 对象）。工厂方法，对应 JIDL 中 `[ctor="true"] Session createSession(string params)`。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| params | string | 是 | - | 预留参数，当前 Native 实现未使用（透传给 `media_session_open`，头文件标注 "Not used yet"），传空字符串 `''` 即可。 |
+
+**返回值**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| Session / null | 会话控制器实例；底层打开失败时返回 null（具体行为以 Native 实现为准）。 |
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+
+const session = mediaSession.createSession('')
+if (!session) {
+  console.log('createSession failed')
+} else {
+  session.onEvent = function (status) {
+    console.log('session event:', status)
+  }
+}
+```
+
+### session.start(fb)
+
+请求当前最活跃的播放端开始/恢复播放。
+
+**参数（fb：Feedback 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 回调签名 `success(msg: string)`，成功时 `msg` 为 `"session start success"`。 |
+| fail | function | 否 | - | 回调签名 `fail(errorMsg: string, code: number)`，失败时 `errorMsg` 为 `"start session error"`，`code` 为底层返回的负 errno。 |
+| complete | function | 否 | - | 回调签名 `complete`；当前 Native 实现**不会**回调 complete（调用后回调即被移除，具体行为以 Native 实现为准）。 |
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.start({
+  success: function (msg) {
+    console.log('start success:', msg)
+  },
+  fail: function (errorMsg, code) {
+    console.log('start fail:', code, errorMsg)
+  },
+  complete: function  {
+    console.log('start complete')
+  }
+})
+```
+
+### session.pause(fb)
+
+请求当前最活跃的播放端暂停播放。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"pause session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**（仅失败时回调 fail）；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.pause({
+  success: function (msg) {
+    console.log('pause success:', msg)
+  },
+  fail: function (errorMsg, code) {
+    console.log('pause fail:', code, errorMsg)
+  }
+})
+```
+
+### session.stop(fb)
+
+请求当前最活跃的播放端停止播放。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"stop session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.stop({
+  fail: function (errorMsg, code) {
+    console.log('stop fail:', code, errorMsg)
+  }
+})
+```
+
+### session.prev(fb)
+
+请求播放端切换到上一首。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"prev session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.prev({
+  fail: function (errorMsg, code) {
+    console.log('prev fail:', code, errorMsg)
+  }
+})
+```
+
+### session.next(fb)
+
+请求播放端切换到下一首。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"next session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.next({
+  fail: function (errorMsg, code) {
+    console.log('next fail:', code, errorMsg)
+  }
+})
+```
+
+### session.increaseVolume(fb)
+
+请求播放端（系统）增大音量。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"increase session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.increaseVolume({
+  fail: function (errorMsg, code) {
+    console.log('increaseVolume fail:', code, errorMsg)
+  }
+})
+```
+
+### session.decreaseVolume(fb)
+
+请求播放端（系统）减小音量。参数结构同 [start](#sessionstartfb)（Feedback）。
+
+- 失败时 fail 回调：`errorMsg` 为 `"decrease session error"`，`code` 为负 errno。
+- 当前实现中**成功不回调 success**；complete 不会被回调。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.decreaseVolume({
+  fail: function (errorMsg, code) {
+    console.log('decreaseVolume fail:', code, errorMsg)
+  }
+})
+```
+
+## 属性（property）
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `onEvent` | function | 只写（writeonly） | 事件回调，签名 `onEvent(status: string)`。赋值后接收媒体会话事件；`status` 为 JSON 字符串，格式 `{"event":"<事件号>","ret":"<结果码>"}`，事件号见下表。Feature 实例已分离时事件被丢弃。 |
+
+**事件号（event 字段取值，Native `MEDIA_EVENT_*`）**
+
+| event 值 | 含义 |
+| -------- | ---- |
+| 101 | `MEDIA_EVENT_CHANGED`：最活跃的被控端发生了变化（应清空此前查询的元数据，需要时重新查询） |
+| 102 | `MEDIA_EVENT_UPDATED`：最活跃的被控端更新了元数据（播放状态/进度/音量等） |
+| 103 | `MEDIA_EVENT_START`：start 控制命令的处理结果 |
+| 104 | `MEDIA_EVENT_PAUSE`：pause 控制命令的处理结果 |
+| 105 | `MEDIA_EVENT_STOP`：stop 控制命令的处理结果 |
+| 106 | `MEDIA_EVENT_PREV_SONG`：prev（上一首）控制命令的处理结果 |
+| 107 | `MEDIA_EVENT_NEXT_SONG`：next（下一首）控制命令的处理结果 |
+| 108 | `MEDIA_EVENT_INCREASE_VOLUME`：increaseVolume 控制命令的处理结果 |
+| 109 | `MEDIA_EVENT_DECREASE_VOLUME`：decreaseVolume 控制命令的处理结果 |
+
+> `ret` 为被控端处理命令的结果码（0 成功，负数为错误）。103~109 是你发出的控制命令被被控端处理后回送的结果；101/102 是框架自动产生的通知。
+
+**示例**
+
+```js
+const mediaSession = require('system.media.session')
+const session = mediaSession.createSession('')
+
+session.onEvent = function (status) {
+  // status 形如：{"event":"103","ret":"0"}
+  var evt = JSON.parse(status)
+  console.log('event:', evt.event, 'ret:', evt.ret)
+}
+
+session.start
+```
+
+## 数据结构
+
+### Feedback
+
+所有控制方法（start/pause/stop/prev/next/increaseVolume/decreaseVolume）的参数对象：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| success | function | 成功回调 `success(msg: string)`；当前实现仅 `start` 成功时会回调（`"session start success"`），其余方法成功不回调 |
+| fail | function | 失败回调 `fail(errorMsg: string, code: number)`；`code` 为底层负 errno，`errorMsg` 见各方法说明 |
+| complete | function | 完成回调 `complete`，无参数；当前 Native 实现不会回调 |
+
+## 注意事项
+
+- **控制器 vs 被控端**：本模块是**控制器**，命令发给系统中"最活跃的被控端"（通常是正在播放音乐的应用，`system.audio` 播放时会自动注册为被控端）。如果系统中没有任何被控端，命令不会有实际效果。
+- **回调行为差异（重要）**：当前 Native 实现中，只有 `start` 在成功时回调 `success`；`pause`/`stop`/`prev`/`next`/`increaseVolume`/`decreaseVolume` 仅在失败时回调 `fail`；所有方法的 `complete` 回调都不会被触发（回调在方法返回前即被移除）。判断命令结果建议以 `onEvent` 事件（103~109）为准。
+- **createSession 参数**：`params` 为预留字符串参数，当前底层 `media_session_open` 未使用，传 `''` 即可；打开失败时返回空值，使用前建议判空。
+- **onEvent 数据格式**：回调参数是 JSON **字符串**（不是对象），内容为 `{"event":"<数字>","ret":"<数字>"}`，使用前需 `JSON.parse`；事件通过 Feature 线程异步投递，不保证与命令调用同栈。
+- **资源释放**：Session 对象被 JS 回收时 Native 自动 `media_session_close`；无需手动关闭。
+- **生命周期**：Feature 实例分离（页面销毁）后到达的事件会被 Native 直接丢弃，不再回调 JS。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

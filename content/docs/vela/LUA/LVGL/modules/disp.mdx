@@ -1,0 +1,175 @@
+---
+title: disp 显示
+description: 显示设备模块（屏幕、分辨率、切屏）
+---
+
+## 模块函数
+
+```lua
+lvgl.disp.get_default -> lv_disp
+lvgl.disp.get_next(disp: lv_disp) -> lv_disp|nil
+lvgl.disp.get_scr_act(disp: lv_disp) -> lv_obj|nil  -- ✅ 需传入 disp
+lvgl.disp.get_scr_prev(disp: lv_disp) -> lv_obj|nil
+lvgl.disp.load_scr(obj: lv_obj, opts?: table) -> nil
+```
+
+## 实例方法
+
+```lua
+disp:get_res -> integer              -- ✅ 返回单个值（如 466）
+disp:set_rotation(deg: 0|90|180|270) -> nil
+disp:get_layer_top -> lv_obj
+disp:get_layer_sys -> lv_obj
+disp:get_next -> lv_disp|nil
+disp:set_bg_opa(opa: integer) -> nil
+disp:set_bg_color(color: integer) -> nil
+disp:set_bg_image(src: string) -> nil
+disp:get_chroma_key_color -> lv_disp  -- ⚠️ 返回 disp 自身
+```
+
+## load_scr 参数
+
+```lua
+lvgl.disp.load_scr(obj, {
+  anim     = "over_left",  -- 动画类型，默认 "none"
+  time     = 1000,         -- 动画时长(ms)
+  delay    = 100,          -- 动画延迟(ms)
+  auto_del = 0,            -- 是否自动删除旧屏（0/1）
+})
+```
+
+### anim 值
+
+| 值 | 说明 |
+| --- | --- |
+| `"none"` / 省略 | 无动画 |
+| `"over_left"` / `"over_right"` / `"over_top"` / `"over_bottom"` | 新屏覆盖旧屏 |
+| `"move_left"` / `"move_right"` / `"move_top"` / `"move_bottom"` | 移动方式切换 |
+| `"fade_on"` | 渐显 |
+| `"fade_in"` / `"fade_out"` | 渐入/渐出 |
+| `"out_left"` / `"out_right"` / `"out_top"` / `"out_bottom"` | 旧屏移出 |
+
+## 示例
+
+```lua
+-- 获取分辨率
+local disp = lvgl.disp.get_default
+local w, h = disp:get_res
+print("resolution:", w, "x", h)
+```
+
+```lua
+-- 切换屏幕
+local new_scr = lvgl.obj_create(nil)
+lvgl.disp.load_scr(new_scr, {
+  anim  = "over_left",
+  time  = 500,
+  delay = 0,
+  auto_del = 1,
+})
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+> 以下内容来自洛汐文档库《LVGL 辅助模块》：[docs.luoxe.cn/docs/vela/lua/lvgl-modules](https://docs.luoxe.cn/docs/vela/lua/lvgl-modules/)
+> Timer、Group、输入设备、文件系统的补充已分别织入 [Timer](/docs/vela/LUA/LVGL/globals/functions/Timer)、[group](/docs/vela/LUA/LVGL/modules/group)、[indev](/docs/vela/LUA/LVGL/modules/indev)、[fs](/docs/vela/LUA/LVGL/modules/fs)。
+
+除控件外，Lua 绑定还提供 Timer、Group、输入设备、文件系统、颜色和字体等模块。
+
+#### 屏幕与显示
+
+| 函数 | 说明 |
+| --- | --- |
+| `lvgl.disp.get_default` | 默认显示设备 |
+| `lvgl.disp.get_next([display])` | 遍历显示设备 |
+| `lvgl.disp.get_scr_act(display)` | 当前活动 screen |
+| `lvgl.disp.get_scr_prev(display)` | 上一个 screen |
+| `lvgl.disp.load_scr(screen [, options])` | 切换 screen |
+
+显示设备对象提供 `get_res`、`set_rotation`、`get_layer_top`、`get_layer_sys`、`get_next`、`set_bg_opa`、`set_bg_color`、`set_bg_image` 和 `get_chroma_key_color`。
+
+切屏参数：
+
+```lua
+lvgl.disp.load_scr(screen, {
+  anim = "over_left",
+  time = 500,
+  delay = 0,
+  auto_del = 1,
+})
+```
+
+`HOR_RES`、`VER_RES` 在部分脚本中是函数，在部分模拟环境中是数值。可统一读取：
+
+```lua
+local function constValue(value)
+  return type(value) == "function" and value or value
+end
+
+local width = constValue(lvgl.HOR_RES)
+local height = constValue(lvgl.VER_RES)
+```
+
+#### 颜色
+
+颜色属性通常接受十六进制整数：
+
+```lua
+label:set {
+  text_color = 0xffffff,
+  bg_color = 0x000000,
+}
+```
+
+透明度使用 `lvgl.OPA` 常量或数值。常见常量包括 `TRANSP`、`COVER` 以及分级透明度值。
+
+#### 字体
+
+字体构造：
+
+```lua
+lvgl.Font(name [, size [, weight]]) -> light userdata
+```
+
+已验证的名称包括 `montserrat`；常见尺寸为 14、16、18、24、32，`weight` 可用 `normal`。字体可作为 `text_font` 属性传入：
+
+```lua
+label:set { text_font = font }
+```
+
+系统字体对象和资源字体的加载方式取决于表盘包。不要把宿主字体指针保存到页面销毁之后。
+
+#### 常量组
+
+常用分组包括：
+
+- `lvgl.ALIGN`：对象对齐；
+- `lvgl.FLAG`：对象标志；
+- `lvgl.STATE`：对象状态；
+- `lvgl.PART`：控件部件；
+- `lvgl.EVENT`：事件码；
+- `lvgl.FLEX_FLOW`、`lvgl.FLEX_ALIGN`：Flex 布局；
+- `lvgl.LABEL_LONG`：长文本模式；
+- `lvgl.OPA`：透明度；
+- `lvgl.DIR`：方向；
+- `lvgl.ANIM`：动画开关或类型。
+
+特殊值包括 `ANIM_REPEAT_INFINITE`、`ANIM_PLAYTIME_INFINITE`、`SIZE_CONTENT`、`RADIUS_CIRCLE`、`COORD_MAX`、`COORD_MIN`、`IMG_ZOOM_NONE`、`BTNMATRIX_BTN_NONE`、`CHART_POINT_NONE`、`DROPDOWN_POS_LAST`、`LABEL_POS_LAST`、`TEXTAREA_CURSOR_LAST`、`LAYOUT_FLEX`、`LAYOUT_GRID`。
+
+#### 机型可用性
+
+| 模块 | Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+| --- | --- | --- |
+| Timer | ✅ | ✅ |
+| Group 与输入设备 | ✅ | ✅ |
+| 显示辅助函数 | ✅ | ✅ |
+| 文件与目录 userdata | ✅ | ✅ |
+
+#### 获取源代码
+
+- [社区 LVGL Lua 文档](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua/lvgl)
+- [LVGL 文档](https://docs.lvgl.io/master/)
+
+参考来源：官方 docs-lua / 洛汐文档库 https://docs.luoxe.cn/

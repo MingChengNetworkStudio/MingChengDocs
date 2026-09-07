@@ -1,0 +1,223 @@
+---
+title: "/data 目录结构与用途"
+---
+
+`/data` 是两类样本的主要可写数据分区，但底层文件系统不同：
+
+机型/样本 | 数据设备 | 文件系统与挂载  
+---|---|---  
+Xiaomi Smart Band 10 Pro（p67tc） |  `/dev/nand_data` | YAFFS；正常启动可 `autoformat`，恢复脚本可 `forceformat`  
+Xiaomi Watch S4 41mm（o63） |  `/dev/data` | 先 `fsckexfat -y -v`，再以 FATFS 挂到 `/data`  
+  
+o63 还把 `/dev/userlog` 单独挂到 `/log`，因此其在线日志不一定写入 `/data/log`。目录用途大体相同，但分区级备份、修复和权限语义不能跨机型照搬。
+
+恢复脚本会清空整个分区
+
+p67tc 的 BL2/OTA `/etc/recovery_reset.sh` 先强制卸载 `/data`，再执行 `mount -t yaffs -o forceformat /dev/nand_data /data`。这不是删除几个设置文件，而是重建整个数据文件系统。不要在 o63 上执行这条 YAFFS 命令；其数据设备和文件系统均不同。
+
+本页目录来自启动脚本和固件二进制中的固定路径。带 `%s`、`%u`、`%lu` 的名称是运行时格式模板；未使用过的功能不会预先创建对应目录。
+
+## 顶层结构
+路径 | 用途  
+---|---  
+`/data/app/` | 系统原生应用的私有数据库、配置、图标缓存和状态。  
+`/data/quickapp/` | 快应用运行时的文件沙箱与缓存。不要与 `/data/app/quickapp/` 混淆。  
+`/data/fitness/` | 运动健康算法输入、缓存、数据库和 UI 聚合结果。  
+`/data/gps/` | GNSS 辅助定位数据、芯片日志和星历文件。  
+`/data/misc/` | 蓝牙、GNSS、车联等系统组件的共享私有数据。  
+`/data/offlinelog/`、`/data/log/` | 离线诊断、功耗、录音、GPS 和蓝牙崩溃日志。  
+`/data/mass/` | 大容量/用户可见或跨模块共享数据；静默 OTA 也在其下暂存。  
+`/data/system/` | 框架级数据库。  
+`/data/factory/` | 工厂自动化、老化与闪存/触控测试结果。  
+`/data/recovery/` | 从只读资源复制出来的恢复程序与配置。  
+`/data/recording/` | 录音生成的 PCM/WAV 文件。  
+`/data/uorb/` | uORB 传感器总线时序/诊断数据。  
+`/data/user/` | 用户功能数据，目前固件明确出现微信支付数据库。  
+`/data/cache/`、`/data/tmp/` | 系统缓存和临时文件。  
+`/data/etc/` | 可写配置覆盖，目前出现 ALSA 配置。  
+`/data/files/` | 跨模块文件区，固件出现音频子目录。  
+`/data/training/`、`/data/train_plan/` | 训练记录与训练计划。  
+  
+顶层还存在若干独立数据库、状态文件、升级包和硬件固件暂存文件，见后文。
+
+## 快应用数据
+### `/data/quickapp/`：运行时沙箱
+固件中的路径模板为 `/data/quickapp/%s/%s/%s`。结合运行时路径实现，可还原为：
+
+路径 | 用途  
+---|---  
+`/data/quickapp/cache/{package}/` | 某快应用的可清理缓存。  
+`/data/quickapp/file/{package}/` | 某快应用的内部持久文件。  
+`/data/quickapp/mass/{package}/` | 某快应用的大文件/共享存储区。  
+`/data/quickapp/tmp/` | 快应用运行时共用的临时目录；该类型不再追加包名。  
+  
+文档 API 中的 `internal://cache/`、`internal://files/` 等虚拟路径由运行时映射到这些真实目录。应用不应硬编码 `/data/quickapp`，因为权限检查、配额和包名隔离在虚拟路径层完成。
+
+### `/data/app/quickapp/`：安装管理信息
+文件 | 用途  
+---|---  
+`config.json` | 快应用系统组件/安装器的配置。  
+`rpk_info.json` | 已安装 RPK 的元信息或索引。  
+  
+这里属于系统原生 `quickapp` 管理组件，不是单个快应用的沙箱。手工改 `rpk_info.json` 可能造成包文件、签名信息和安装数据库不一致。
+
+## 原生应用数据 `/data/app`
+子目录/文件 | 用途  
+---|---  
+`alarm/alarm.db` | 闹钟记录。  
+`calendar/calendar.db` | 日历数据。  
+`compass/compass.db` | 指南针校准/应用状态。  
+`ctrl/ctrl.db` | 控制类应用状态；具体表结构需再解析数据库。  
+`fusion/fusion.db`、`fusion/image/` | 融合中心数据库和图片缓存。  
+`health/health.db` | 健康应用数据库。  
+`home/home.db` | 主界面/首页状态。  
+`launcher/launcher.db` | 应用列表、顺序或启动器状态。  
+`nfc/nfccard_common.db` | NFC 卡片公共数据库。  
+`nfc/nfccard_switch.db` | NFC 卡片开关/启用状态。  
+`nfc/nfccard.json` | NFC 卡片配置/描述信息。  
+`nfc/nfc_force_rf.conf` | 强制 RF 行为配置。  
+`nfc/rfConfig_flag.txt` | RF 配置应用标志。  
+`notifications/noti_reply_sms.db` | 通知快捷回复/短信回复数据。  
+`notifications/icon/`、`small/` | 通知图标缓存。  
+`perpetual_calendar/perpetual_calendar.db` | 万年历数据库。  
+`recorder/data.txt`、`temp_data.txt` | 录音列表/临时元数据。  
+`recorder/flag.bin`、`flagtmp.bin` | 录音状态标志及临时副本。  
+`sale/record.wav` | 销售/演示测试使用的录音样本。  
+`sport/` | 运动应用私有数据。  
+`system/install_info_v1.db` | 安装信息数据库。  
+`system/system.db` | 系统应用数据库。  
+`system/uninstall_app.db` | 卸载应用记录。  
+`timer/timer.db` | 计时器数据。  
+`todolist/todolist.db` | 待办事项。  
+`tomatotimer/tomatotimer.db` | 番茄钟状态。  
+`training/training.db` | 训练应用数据库。  
+`watchface/watchface.db` | 表盘安装、选择与索引信息。  
+`weather/database.db` | 天气缓存数据库。  
+`worldclock/worldclock.db` | 世界时钟城市列表。  
+`text.bin` | `/data/app` 下的独立二进制数据文件；仅凭路径无法确定结构。  
+  
+这些 `.db` 多数是 SQLite，但不能只看扩展名就假定。备份后可用 `file` 和 `sqlite3 '.tables'` 只读确认；系统服务运行时直接替换数据库可能丢失 WAL/锁状态。
+
+## 运动健康 `/data/fitness`
+这是 `/data` 中层级最深、写入最频繁的一组目录，也包含敏感健康数据。
+
+路径 | 用途  
+---|---  
+`cache/database/` | `allday.db`、`common.db`、`daily.db`、`trainsys.db`、`vita_remind.db`、`vitality.db` 等算法/业务数据库。  
+`cache/algorithm/` | 算法运行缓存，例如室内跑校准。  
+`cache/abnormal/` | 异常健康事件缓存。  
+`cache/osahs/` | 睡眠呼吸暂停相关的心率和 OSAHS 分析缓存。  
+`cache/sleep/` | 按时间命名的血氧、心率、睡眠缓存及评估结果。  
+`cache/swimhr/` | 游泳心率缓存。  
+`capture/` | 传感器/算法采集数据。  
+`daily/` | 日级汇总数据。  
+`research/`、`research/p32/` | 研究功能和 p32 格式/版本的数据。  
+`sleep/hrv/` | 睡眠 HRV 数据。  
+`sport/highlvl/` | 高阶运动算法配置。  
+`sport/p{profile}/` | 分用户/档案的运动恢复数据。  
+`view/arh/` | 静息/全天心率分布视图数据。  
+`view/baroatt/` | 气压与海拔记录和 12 小时静息数据。  
+`view/bo/` | 血氧异常和当天详情。  
+`view/hr/` | 心率原始、详情、分布、30 天静息与高低/房颤异常结果。  
+`view/research/` | 血压研究所需的加速度、气压、PPG 质量等原始数据。  
+`view/sleep/` | 睡眠阶段及 v1/v2 UI 聚合结果。  
+`view/sport_history/` | 运动轨迹、索引和恢复记录。  
+`view/stress/` | 压力当天详情、分布和 30 天结果。  
+`view/vigor/` | 活力相关展示数据。  
+  
+文件名中的 `%lu` 多为时间戳，`%u` 多为 profile/实例编号，`.algo` 是算法产出格式而非可执行文件。不要通过删除单个 `.algo` 文件来“校准”健康功能；数据库、缓存索引和 UI 汇总可能互相依赖。
+
+## 定位、蓝牙、日志与媒体
+路径 | 用途  
+---|---  
+`/data/gps/airoha/EPO_BDS_3.DAT` | Airoha GNSS 的北斗辅助星历。  
+`/data/gps/airoha/EPO_GAL_3.DAT` | Galileo 辅助星历。  
+`/data/gps/airoha/EPO_GR_3_X.DAT` | GPS/GLONASS 组合辅助星历。  
+`/data/gps/c2t/epo.pgl` | 另一 GNSS 实现使用的 EPO 数据。  
+`/data/gps/log/` | GNSS 日志。  
+`/data/misc/gps/mnl.prop`、`mnl_GLP.prop` | GNSS/MNL 配置属性。  
+`/data/misc/bt/bt_storage.db` | 蓝牙配对、设备或协议栈持久状态。  
+`/data/misc/bt/snoop/` | Bluetooth snoop 抓包日志。  
+`/data/misc/car/` | 车联功能数据。  
+`/data/offlinelog/btc_dump.log` | 蓝牙控制器转储日志。  
+`/data/offlinelog/gps/` | 离线 GNSS 日志。  
+`/data/offlinelog/power/tdp0.log`、`tdp1.log` | 功耗/电源诊断日志。  
+`/data/offlinelog/record/` | 诊断录音输入/输出 PCM。  
+`/data/offlinelog/log{time}.gz` | 按时间压缩的离线日志。  
+`/data/log/btc_dump.log` | 当前日志区中的蓝牙控制器转储。  
+`/data/recording/{id}.pcm`、`{id}.wav` | 录音原始数据和封装后的音频。  
+`/data/media_manage_data.bin` | 媒体管理器索引/状态。  
+`/data/media_song_data.bin` | 歌曲列表或媒体条目数据。  
+`/data/files/audio/` | 音频文件区。  
+  
+BT snoop 和离线日志可能包含设备地址、通知内容、定位数据或音频，应按敏感数据处理。
+
+## OTA、Recovery 与硬件固件
+路径 | 用途与生命周期  
+---|---  
+`/data/ota.zip` | 完整 OTA 包。BL2/OTA 会验签、以 ZIPFS 挂载到 `/ota`，完成或失败后按分支删除。  
+`/data/ota_tmp/` | OTA 临时目录，流程结束时删除。  
+`/data/vela_ota.bin` | BL2 从 OTA 包复制的 OTA 执行镜像，随后用 `boot` 启动。  
+`/data/mass/silent_ota/` | 静默 OTA 的大文件暂存目录，升级结束后清理。  
+`/data/recovery/recovery/recovery.conf` | Recovery 配置。OTA 环境首次发现 `/data/recovery` 不存在时，会从 `/resource/recovery` 复制整套文件。  
+`/data/hyn_firmware_p67.bin` | Hynitron 触控固件暂存/升级文件。  
+`/data/tp_gtw631_zinitix_firmware.bin` | GTW631/Zinitix 触控固件。  
+`/data/tp_vxn_gtw623_firmware.bin` | GTW623/VXN 触控固件。  
+`/data/tp_zinitix_firmware.bin` | 通用 Zinitix 触控固件路径。  
+  
+这些触控固件路径说明 AP 包含在线升级/替换逻辑，不代表把任意同名文件放入 `/data` 就会安全刷写。触发条件、镜像头、型号校验和回滚能力必须从对应驱动继续确认。
+
+## 系统状态、用户数据与特殊开关
+路径 | 用途  
+---|---  
+`/data/persist.db` | 系统持久属性/键值状态数据库。实际表结构应从文件确认。  
+`/data/system/framework.db` | 框架级共享数据库。  
+`/data/power_event` | 电源事件记录或状态。  
+`/data/usage_stats` | 使用统计数据。  
+`/data/snapshot/{name}.bin` | p67 系统截图的 framebuffer 原始文件。  
+`/data/mifind/mifind_record.db` | 查找设备/米家查找功能记录。  
+`/data/user/wxpay/wxpay.db` | 微信支付用户数据库。  
+`/data/training/records_data.bin` | 训练记录的二进制存储。  
+`/data/store_demo` | 门店演示模式状态或目录。  
+`/data/nobusiness/` | 正常 AP `rcS` 的停服开关：目录存在时跳过业务服务启动。  
+`/data/del_res` | 资源删除/清理标记或列表；具体格式需读取实机文件后确定。  
+`/data/etc/alsa.conf` | 可写 ALSA 音频配置，可覆盖/补充固件内置音频参数。  
+  
+`/data/nobusiness` 的判断是 `if [ ! -d /data/nobusiness ]; then ...`。因此它必须是目录才会触发；同名普通文件不会满足 `-d`。创建它后重启会让大量业务服务不启动，适合救援排障，但 UI、蓝牙、健康、快应用等功能也可能一起消失。删除该目录并重启可恢复正常启动路径。
+
+## 工厂测试与临时文件
+路径 | 用途  
+---|---  
+`/data/factory/cit_auto_test_result.txt` | CIT 自动测试结果。  
+`/data/factory/rmt_auto_test_result.txt` | RMT 自动测试结果。  
+`/data/factory/fac_runin_info.txt` | 老化测试信息。  
+`/data/factory/fac_runin_error.txt` | 老化测试错误。  
+`/data/factory/fac_runin_tp.txt` | 老化过程的触控测试信息。  
+`/data/factory/flash_test.txt` | Flash 测试结果。  
+`/data/test10m.dat` | 约 10 MiB 的存储/吞吐测试文件。  
+`/data/tmp/29598_log.tar.gz` | 某诊断编号对应的日志包。  
+`/data/tmpcompress.tar.gz` | 临时压缩输出。  
+  
+工厂测试结果常用于售后判定。若要清理空间，先备份这些文本；不要在不清楚测试状态机的情况下伪造“通过”结果。
+
+## 备份与安全修改
+先确认真实挂载，再做文件级备份：
+```text
+
+
+mount | grep ' /data '
+df -h /data
+du -k /data/* 2>/dev/null
+
+```
+
+如果目标 shell 支持 `tar`，可在业务服务停止后备份关注的目录：
+```text
+
+
+tar -czf /data/mass/vela-data-backup.tar.gz \
+  /data/app /data/quickapp /data/system /data/misc
+
+```
+
+注意不要把备份包写回正在完整备份的目录形成递归，也不要在数据库活跃写入时只复制单个 `.db`。最稳妥的方式是在 Recovery 或停服状态下做文件级备份。p67tc 的分区级备份必须理解 YAFFS OOB/ECC 布局；o63 的 FATFS/exFAT 镜像也应保留分区尺寸、引导区和文件系统校验信息。两者都不能把普通文件复制误当作跨机型可恢复镜像。

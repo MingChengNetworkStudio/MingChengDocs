@@ -1,0 +1,37 @@
+---
+title: "Factory rc.sysinit"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 414 字节  
+SHA-256 |  `919179bf0a80db6d1de30ad35f11eceb1d116bde63b716d0b24e8ceb51b7efa4`  
+阶段 | Factory 基础环境  
+  
+Factory 的挂载布局接近 AP，但更强调诊断命令和产测日志。
+
+## 挂载
+命令 | 作用  
+---|---  
+`mount -t procfs /proc` | 提供进程/内核状态供测试读取  
+`mount -t tmpfs /tmp` | 测试临时目录  
+`pmconfig stay normal` | 避免产测时进入低功耗  
+`mount -t romfs /dev/resource /resource` | 提供工厂图片、字体、固件等资源  
+`mount -t yaffs -o autoformat /dev/nand_data /data` | 挂载持久数据区  
+`mount -t littlefs -o autoformat /dev/mode /mode` | 挂载模式分区  
+`mount -t littlefs -o autoformat /dev/nv /misc` | 挂载 NV/属性区  
+  
+## 基础服务
+服务 | 用途  
+---|---  
+`offline_log start -w &` | 保存产测和故障日志  
+`kvdbd &` | 提供属性/键值存储  
+`at_cmd &` | 提前开放 AT/诊断指令通道  
+`miwear_rtc_checker` | 检查 RTC  
+`system_trace` | 初始化系统追踪  
+  
+与 AP 相比，Factory 把 `at_cmd` 放在 `rc.sysinit`，使正式工厂应用启动前就能通过外部工具控制设备。
+
+## 修改风险
+删除 `pmconfig stay normal` 可能让长时间测试被休眠打断；关闭日志和 AT 通道会显著降低产线可诊断性。`autoformat` 仍可能在文件系统异常时格式化数据分区。

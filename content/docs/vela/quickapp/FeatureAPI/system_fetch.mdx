@@ -1,0 +1,284 @@
+---
+title: "system.fetch 网络请求"
+---
+
+> 发起 HTTP/HTTPS 网络请求，支持 GET/POST 等常用方法、自定义请求头、表单/JSON/二进制请求体，以及文本、JSON、文件下载等多种响应类型。官方标准文档中本模块名为"数据请求 fetch"，用于获取网络数据。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.fetch` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | `hapjs.permission.INTERNET` |
+
+## 接口声明
+
+```json
+{ "name": "system.fetch" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import fetch from '@system.fetch'
+// 本仓库运行时/测试中使用的写法
+const fetch = require('system.fetch')
+```
+
+## 功能概述
+
+`system.fetch` 提供快应用中的 HTTP 客户端能力：传入 URL、请求方法、请求头、请求体和超时时间，异步返回 HTTP 状态码、响应头与响应体。Native 侧基于 libuv 事件循环的 `uv_request` 网络接口实现（启用 `CONFIG_LIB_CURL` 时底层为 libcurl），请求在后台执行，结果通过 Promise 返回；页面销毁时未完成的请求会被自动取消。响应体支持自动识别/手动指定为文本、JSON 或下载为文件。
+
+官方建议：请求头会将其所有属性设置到请求的 header 部分，例如可通过 `{"Accept-Encoding": "gzip, deflate", "Accept-Language": "zh-CN,en-US;q=0.8,en;q=0.6"}` 设置 User-Agent 相关头；失败回调可能因为缺乏权限而触发，调用前请确认已声明网络权限。
+
+## API
+
+### fetch.fetch(params)
+
+发起一次网络请求。异步模型：**Promise 风格**（JIDL 定义为 `promise<object> fetch(FetchPara obj)`），不支持 success/fail/complete 回调。
+
+> 官方标准文档描述：官方文档中 `fetch.fetch(OBJECT)` 的参数表列出了 `success`/`fail`/`complete` 回调，并演示了回调与 Promise 两种写法。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| url | string | 是 | — | 请求地址（资源 url），仅支持 `http://` / `https://` 开头的 URL；Native 会对 URL 做编解码处理（已百分号编码的保持原样，其余特殊字符自动百分号编码） |
+| data | String/Object/ArrayBuffer | 否 | — | 请求的参数，可以是字符串、JS 对象或 ArrayBuffer。实现同时接受 string、ArrayBuffer/TypedArray 与普通 object：普通 object 默认按 `application/x-www-form-urlencoded` 序列化（`k1=v1&k2=v2`，值支持 string/number/boolean）；若请求头指定 `Content-Type: application/json`，则按 JSON 字符串发送；ArrayBuffer 按二进制发送（默认 `application/octet-stream`）。GET/HEAD 方法下该字段不发送。详见下方"data 与 Content-Type 关系" |
+| header | object | 否 | — | 请求头对象，会将其所有属性设置到请求的 header 部分，键值均为字符串（值也接受 number）。`Content-Type` 未显式指定 `charset` 时会自动追加 `; charset=utf-8` |
+| method | string | 否 | `""`（即 GET） | 请求方法，取值见下方 MethodType 枚举，大小写不敏感；传空字符串或不传时默认为 GET；传无法识别的非空字符串会参数报错。官方取值：OPTIONS，GET，HEAD，POST，PUT，DELETE，TRACE，CONNECT |
+| responseType | string | 否 | `""`（自动识别） | 响应类型，取值见下方 ResponseType 枚举；传空字符串或不传时，根据响应头 `Content-Type` 自动判断（`application/json` 按 JSON 解析，否则按文本） |
+| timeout | number | 否 | `20000` | 超时时间，单位毫秒；传入值 ≤ 0 时也按默认值 20000 处理 |
+
+**method 枚举（MethodType，JIDL 注释定义）**
+
+| 取值 | 说明 |
+| ---- | ---- |
+| `'get'` | GET（默认） |
+| `'options'` | OPTIONS |
+| `'head'` | HEAD |
+| `'post'` | POST |
+| `'put'` | PUT |
+| `'delete'` | DELETE |
+| `'trace'` | TRACE |
+| `'connect'` | CONNECT |
+
+**data 与 Content-Type 关系**
+
+| data 类型 | Content-Type | 说明 |
+| --- | --- | --- |
+| String | 不设置 | Content-Type 默认为 `text/plain`，data 值作为请求的 body |
+| String | 任意 Type | data 值作为请求的 body |
+| Object | 不设置 | Content-Type 默认为 `application/x-www-form-urlencoded`，data 按照 url 规则进行 encode 拼接作为请求的 body |
+| Object | `application/x-www-form-urlencoded` | data 按照 url 规则进行 encode 拼接作为请求的 body |
+| Object | `application/json`（实现额外识别） | data 按 JSON 字符串发送 |
+| Object | 上述之外的任意 type | — |
+| ArrayBuffer | 不设置 | Content-Type 默认为 `application/octet-stream`，data 值作为请求的 body |
+| ArrayBuffer | 任意 Type | data 值作为请求的 body |
+
+**responseType 枚举（ResponseType，JIDL 注释定义）**
+
+| 取值 | 说明 |
+| ---- | ---- |
+| `'text'` | 响应体按字符串返回（返回普通文本） |
+| `'json'` | 响应体按 JSON 解析为对象返回（返回 JS 对象）；解析失败会 reject |
+| `'file'` | 下载为文件，`data` 返回文件在应用目录下的相对路径（文件保存在应用 files 目录，文件名取 URL 末段；URL 无文件名时使用时间戳命名） |
+| `'arraybuffer'` | 声明按 ArrayBuffer 处理；**当前 Native 实现中响应体仍按字符串返回**，具体行为以 Native 实现为准 |
+
+> 官方标准文档描述：官方文档中未指定 `responseType` 时，服务器返回 header 中 type 是 `text/*` 或 `application/json`、`application/javascript`、`application/xml` 的值为文本内容，否则返回存储的临时文件 uri（临时文件如果是图片或视频内容，可以将图片设置到 image 组件）；`arraybuffer` 声明返回 ArrayBuffer 对象。
+
+**请求 Content-Type 枚举（ContentType，JIDL 注释定义）**
+
+| 取值 | 说明 |
+| ---- | ---- |
+| `'text/plain'` | 文本（string 请求体默认） |
+| `'application/x-www-form-urlencoded'` | 表单（普通 object 请求体默认） |
+| `'application/octet-stream'` | 二进制流（ArrayBuffer 请求体默认） |
+
+> 实现额外识别 `application/json` 请求头：object 请求体配合该头时按 JSON 字符串发送。
+
+**Promise resolve 值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| code | number（Integer） | 服务器状态 code / HTTP 状态码（如 200、404、500） |
+| headers | object | 服务器 response 的所有 header；键为响应头字段名，值为字符串 |
+| data | string / object | 响应体：`responseType: 'json'` 时为解析后的对象；`'file'` 时为下载文件的应用相对路径；其余情况为字符串 |
+
+> 注意：HTTP 4xx/5xx **不会** reject，Promise 仍会 resolve，错误状态体现在 `code` 字段中；只有参数错误、网络层错误、超时或响应体解析失败才会 reject。
+
+**Promise reject**
+
+- 参数：`(data: string, code: number)`，`data` 为错误信息字符串，`code` 为错误码。
+- 错误码/错误信息（从 Native 实现提取）：
+
+| code | 错误码名 | 触发场景与 message |
+| ---- | ---- | ---- |
+| 200 | GENERAL | 通用错误：`"create content_t err"`、`"create native fetch err"`、`"create request err"`；未启用 libcurl 时的网络层错误（message 为底层错误文本） |
+| 202 | ARGSERROR | 参数错误：`"invalid url"`（URL 为空或非 http/https）、`"invalid method"`、`"invalid headers"`、`"invalid data"`（如 object 中含不支持的值类型）；启用 libcurl 时参数类 curl 错误也映射为此码 |
+| 204 | TIMEOUT | 请求超时（libcurl 的 `CURLE_OPERATION_TIMEDOUT`） |
+| 300 | IOERROR | 响应体与 responseType 不匹配：`"responseType dosen't match response data"`（如声明 `'json'` 但响应体不是合法 JSON）；启用 libcurl 时的收发/读写错误（`CURLE_READ_ERROR`/`CURLE_RECV_ERROR`/`CURLE_SEND_ERROR`） |
+
+**示例**
+
+GET 请求（Promise 风格）：
+
+```js
+const fetch = require('system.fetch')
+
+fetch.fetch({
+  url: 'https://example.com/api/info',
+  method: 'get'
+}).then(function (ret) {
+  console.log('HTTP 状态码：', ret.code)
+  console.log('响应头：', ret.headers)
+  console.log('响应体：', ret.data)
+}).catch(function (err) {
+  // err 为错误信息，错误码可从异常对象获取（框架约定）
+  console.log('请求失败：', err)
+})
+```
+
+POST 表单（普通 object 默认按 urlencoded 发送）：
+
+```js
+const fetch = require('system.fetch')
+
+fetch.fetch({
+  url: 'https://example.com/api/login',
+  method: 'post',
+  header: {
+    'Content-Type': 'application/x-www-form-urlencoded'
+  },
+  data: {
+    username: 'alice',
+    remember: true
+  }
+}).then(function (ret) {
+  console.log(ret.code, ret.data)
+}).catch(function (err) {
+  console.log('fail', err)
+})
+```
+
+POST JSON（显式指定 JSON Content-Type，responseType 声明 JSON）：
+
+```js
+const fetch = require('system.fetch')
+
+fetch.fetch({
+  url: 'https://example.com/api/device',
+  method: 'put',
+  header: {
+    'Content-Type': 'application/json'
+  },
+  data: {
+    name: 'vela-device',
+    interval: 30
+  },
+  responseType: 'json',
+  timeout: 10000
+}).then(function (ret) {
+  // ret.data 为解析后的对象
+  console.log(ret.data && ret.data.id)
+}).catch(function (err) {
+  console.log('fail', err)
+})
+```
+
+发送二进制（ArrayBuffer）：
+
+```js
+const fetch = require('system.fetch')
+
+const buf = new ArrayBuffer(4)
+const view = new Uint8Array(buf)
+view[0] = 1
+view[1] = 2
+view[2] = 3
+view[3] = 4
+
+fetch.fetch({
+  url: 'https://example.com/api/upload',
+  method: 'post',
+  data: buf,
+  header: {
+    'Content-Type': 'application/octet-stream'
+  }
+}).then(function (ret) {
+  console.log('upload result', ret.code)
+}).catch(function (err) {
+  console.log('fail', err)
+})
+```
+
+下载文件（responseType 为 `'file'`）：
+
+```js
+const fetch = require('system.fetch')
+
+fetch.fetch({
+  url: 'https://example.com/files/logo.png',
+  responseType: 'file'
+}).then(function (ret) {
+  // ret.data 为下载文件在应用目录下的相对路径，可配合 @system.file 使用
+  console.log('文件已保存到：', ret.data)
+}).catch(function (err) {
+  console.log('下载失败：', err)
+})
+```
+
+官方示例（Promise 写法，回调写法官方文档亦有演示，openvela 实证仅支持 Promise）：
+
+```js
+fetch.fetch({
+  url: 'http://www.example.com',
+  responseType: 'text'
+}).then(res => {
+  console.log(`the status code of the response: ${res.code}`)
+  console.log(`the data of the response: ${res.data}`)
+  console.log(`the headers of the response: ${JSON.stringify(res.headers)}`)
+}).catch(error => {
+  console.log(`handling fail, errMsg = ${error.data}`)
+  console.log(`handling fail, errCode = ${error.code}`)
+})
+```
+
+## 注意事项
+
+- **权限**：调用前必须声明 `hapjs.permission.INTERNET`；官方文档同样指出失败回调可能因为权限失败。
+- **URL 限制**：仅接受 `http://` / `https://` 开头的地址，其他 scheme（如 `file://`、`internal://`）会以 `"invalid url"`（code 202）拒绝。
+- **HTTP 状态码与失败的区别**：服务器返回 4xx/5xx 时 Promise 仍然 resolve，需通过 `ret.code` 自行判断；只有网络不通、超时、参数非法、响应体解析失败等才会 reject。
+- **GET/HEAD 请求体**：GET/HEAD 方法下 `data` 字段不会发送，且 `Content-Type` 会被置为 `text/plain; charset=utf-8`。
+- **表单序列化限制**：object 请求体按 urlencoded 序列化时，仅支持字符串、数字、布尔值；嵌套对象、数组等类型会导致 `"invalid data"`（code 202）。需要发送复杂结构时请使用 `Content-Type: application/json`。
+- **超时**：单位毫秒，默认 20000ms（20 秒）；传入非正数同样按 20000ms 处理。
+- **文件下载**：`responseType: 'file'` 时文件保存到应用 files 目录，返回应用相对路径；URL 末段作为文件名，URL 不含文件名时以当前时间戳（`YYYYMMDD HHMMSS`）命名。
+- **请求生命周期**：请求与 Feature 实例绑定，页面/实例销毁（onDestroy）时所有未完成请求会被取消并释放，cancel 场景日志为 `"user cancel request"`。
+- **响应体大小**：响应头含 `Content-Length` 且无 `Content-Encoding` 时按其值确定 body 长度，否则按字符串长度处理。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9  | 不支持 |
+| 小米手环 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

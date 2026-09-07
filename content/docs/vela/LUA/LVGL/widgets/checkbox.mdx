@@ -1,0 +1,51 @@
+---
+title: Checkbox
+description: 复选框控件
+---
+
+继承自 [Object](/docs/vela/LUA/LVGL/widgets/object)
+
+## 创建
+
+```lua
+local cb = parent:Checkbox {
+  text = "启用 Wi-Fi",
+}
+```
+
+## 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `text` | string | 复选框显示文本 |
+
+## 方法
+
+| 方法 | 说明 |
+|------|------|
+| `get_text` | 获取当前显示文本 |
+| `set(tbl)` | 批量设置属性 |
+
+## 示例
+
+```lua
+local cb = lvgl.Checkbox(nil, {
+  x = 50, y = 60,
+  text = "我已阅读并同意协议",
+})
+
+print(cb:get_text)
+cb:set({ text = "启用蓝牙" })
+
+cb:onClicked(function
+  print("Checkbox clicked: " .. cb:get_text)
+end)
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+洛汐文档库记录：Checkbox 除 `text` 属性外，选中状态（checked state）不提供专用方法，而是复用 Object 状态方法（`add_state` / `clear_state` / `get_state`）读写。
+
+参考来源：官方 docs-lua / 洛汐文档库

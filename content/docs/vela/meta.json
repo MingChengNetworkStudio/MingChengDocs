@@ -1,0 +1,7 @@
+{
+  "title": "Vela 开发文档",
+  "icon": "BookOpen",
+  "description": "Xiaomi Vela系统全套开发文档",
+  "root": true,
+  "pages": ["index", "LUA", "quickapp", "appendix"]
+}

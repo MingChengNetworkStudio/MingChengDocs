@@ -1,0 +1,6 @@
+{
+  "title": "快应用 Feature",
+  "icon": "PuzzlePiece",
+  "description": "快应用（Quick App）Feature API 参考",
+  "pages": ["index", "FeatureAPI"]
+}

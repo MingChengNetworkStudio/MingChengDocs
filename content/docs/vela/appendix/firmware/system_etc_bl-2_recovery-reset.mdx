@@ -1,0 +1,45 @@
+---
+title: "BL2 recovery_reset.sh"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 256 字节  
+SHA-256 |  `1bf971b1e548d02682f48591fd71590af6d6276c675809003f58fc1f16217bc2`  
+调用条件 | reset cause 为 `restore` 或 `factory`  
+  
+这是恢复出厂数据清理脚本。BL2 `rcS` 检测到 `cpu_soft_reset(restore)` 或 `cpu_soft_reset(factory)` 时调用它。
+
+## 实际操作
+
+```text
+
+set +e
+umount -f /data
+mount -t yaffs -o forceformat /dev/nand_data /data
+
+```
+
+步骤含义：
+
+  1. 关闭遇错退出；
+  2. 强制卸载 `/data`；
+  3. 使用 YAFFS `forceformat` 重新格式化 NAND 数据分区并挂载回来。
+
+因此它清理的核心是 `/dev/nand_data`，会删除已安装快应用、应用数据、系统数据库和位于 `/data` 的 OTA 临时文件。
+
+## 被注释的 SST 清理
+脚本还保留了一段注释代码，原计划挂载 `/dev/sst` 并删除 `/sst/00000080`：
+```text
+
+
+# mount -t littlefs /dev/sst /sst
+# rm -r /sst/00000080
+
+```
+
+SST 通常用于安全存储或受保护对象。该段被注释说明当前恢复出厂默认保留这块数据，可能是为了保留设备身份、密钥或工厂校准。不要在不了解对象含义时取消注释。
+
+## 风险与回滚
+`forceformat` 是不可逆数据操作。运行前应备份 `/data`；仅把脚本改成普通 `autoformat` 不等于安全清理，也可能导致恢复出厂不彻底。OTA 环境内有完全相同的副本，但其 `rcS` 没有直接调用。

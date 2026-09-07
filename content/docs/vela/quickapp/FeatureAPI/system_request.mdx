@@ -1,0 +1,334 @@
+---
+title: "system.request 网络下载任务"
+---
+
+> 发起后台文件下载任务，并通过 token 查询/监听下载任务的完成结果与进度。官方标准文档中本模块名为"下载 request"，用于下载文件。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.request` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | `download` 需要 `hapjs.permission.INTERNET`；`onDownloadComplete` 无权限注解 |
+
+## 接口声明
+
+```json
+{ "name": "system.request" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import request from '@system.request'
+// 本仓库运行时/测试中使用的写法
+const request = require('system.request')
+```
+
+## 功能概述
+
+`system.request` 用于把一个 URL 对应的文件**下载到应用私有目录**：调用 `download` 启动下载任务后会**立即**拿到一个任务标识 `token`（任务在后台继续执行），下载进度通过 `onDownLoadNotify` 回调上报；任务的最终结果（成功后的文件路径或失败原因）需要调用 `onDownloadComplete` 凭 `token` 查询——若任务仍在进行，回调会在任务结束时触发；若任务已结束，则立即返回缓存的结果。
+
+底层基于 libuv 网络请求（`uv_request_*`，HTTP 方法固定为 `GET`）实现，文件保存路径通过应用沙箱路径工具（`internal://` 方案）解析。Native 侧会缓存最近 10 个已结束任务的结果，超出后最早的记录被淘汰。
+
+> 与 `system.fetch` 的区别：`system.fetch` 面向通用 HTTP 请求/响应（AJAX 式取数据）；`system.request` 面向**后台文件下载任务**，提供任务 token、进度通知和跨页面的完成结果查询。
+
+官方说明：`onDownloadComplete` 成功返回的 `uri` 默认情况下文件处于应用缓存目录；如果文件类型为图片或者视频且要求用户可以在相册等应用内查看，则需要将该文件转存至公共目录，参考 media 接口中的方法实现即可。
+
+## API
+
+### request.download(params)
+
+启动一个文件下载任务。异步模型为**回调风格**（success/fail/complete）。注意：`success` 回调在任务**成功启动后立即**被调用并返回 `token`，**不代表文件下载完成**；文件下载的最终结果请使用 `onDownloadComplete` 监听。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| url | string | 是 | - | 下载地址（资源 url），必须以 `http://` 或 `https://` 开头，协议头后不能为空且不能包含空白字符，否则以参数错误失败 |
+| header | string | 否 | - | HTTP 请求头，为 JSON 字符串形式，如 `'{"test":"abc","test2":"ddd"}'`；Native 侧解析后逐键追加为请求头。官方说明：会将其所有属性设置到请求的 header 部分 |
+| filename | string | 否 | - | 下载文件名/保存文件名。普通文件名（如 `'sample.rpk'`）保存到应用 files 目录；也可传 `internal://` 应用相对路径。不传时默认从网络请求或 url 中获取（从 URL 末段推导文件名，推导失败则使用默认名 `download_file-<随机数>.txt`） |
+| share | boolean | 否 | `true` | 任务是否为共享任务。`true`（默认）时多个下载任务并行互不影响；`false` 时为独占任务——启动新的独占任务会**取消上一个独占任务**（官网遗漏字段，社区资料：洛汐文档库） |
+| onDownLoadNotify | function（`download_notify_cb`） | 否 | - | 下载进度回调，签名 `cb(data: notify_data_t)`，见下方数据结构（官网遗漏字段，社区资料：洛汐文档库。注意字段名中 `DownLoad` 的 `L` 大写是固件 ABI 的一部分，必须严格写作 `onDownLoadNotify`） |
+| success | function（`download_succ_cb`） | 否 | - | 任务成功启动回调，签名 `cb(data: download_succ_t)`，`data.token` 为下载任务标识 |
+| fail | function（`download_fail_cb`） | 否 | - | 启动失败回调，签名 `cb(data: string, code: number)` |
+| complete | function（`download_cmpl_cb`） | 否 | - | 启动阶段结束回调（成功/失败都会调用），无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| token | string | 下载的 token，下载任务标识，格式为 `<时间戳秒>-<随机数>-<自增序号>`，根据此 token 获取下载状态（用于 `onDownloadComplete` 查询任务结果） |
+
+**进度回调 onDownLoadNotify 参数（notify_data_t）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| result | number | 进度状态：`0` 表示已获知文件总大小、进度有效；`-1` 表示总大小未知（服务器未返回 Content-Length 等）。社区资料：洛汐文档库指出 `result` 是底层下载进度状态/结果码，JIDL 没有给出 `result` 枚举 |
+| percent | number | 下载进度百分比 `0~100`（`100 * 已下载字节 / 总字节`）；总大小未知时为 `0`。仅在已下载字节数变化时才回调。社区资料：JIDL 没有规定百分比一定单调递增，UI 应把 percent 限制到 0–100，并允许重复通知 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 启动阶段的错误码/错误信息（来自 Native 实现）：
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `invalid url` | `url` 为空或不合法（非 http/https、含空白字符等） |
+| 200 | `FT_ERR_GENERAL` | `malloc fail` | 内部内存分配失败 |
+| 200 | `FT_ERR_GENERAL` | `no space to download file` | 磁盘剩余空间低于系统保留阈值（`check_disk_limit` 检查失败） |
+
+- 任务在后台执行过程中失败/被取消时，错误通过 `onDownloadComplete` 的 fail 回调返回（见下文）：任务失败为 `1000`（`FT_ERR_TASK_FAILED`，message 为网络层错误描述），任务被取消为 `1002`（`FT_ERR_CANCEL_ERROR_CODE`，message 为 `user cancel request`）。
+
+**示例**
+
+```js
+const request = require('system.request')
+
+let token = null
+
+request.download({
+  url: 'https://statres.quickapp.cn/quickapp/quickapp/201806/file/quickapp_sample_v1000.rpk',
+  header: '{"test":"abc","test2":"ddd"}',
+  filename: 'sample.rpk', // 指定保存文件名
+  share: true,
+  onDownLoadNotify: function (data) {
+    console.log('progress: result =', data.result, 'percent =', data.percent)
+  },
+  success: function (ret) {
+    // 任务仅表示“启动成功”，此时拿到 token
+    token = ret.token
+    console.log('download started, token =', ret.token)
+  },
+  fail: function (data, code) {
+    console.log('download start fail', code, data)
+  },
+  complete: function  {
+    console.log('download start phase complete')
+  }
+})
+```
+
+官方示例：
+
+```js
+request.download({
+  url: 'http://www.example.com',
+  success: function(data) {
+    console.log(`handling success${data.token}`)
+  },
+  fail: function(data, code) {
+    console.log(`handling fail, code = ${code}`)
+  }
+})
+```
+
+**进度处理建议（社区资料：洛汐文档库）**
+
+进度通知不等同于下载完成，最终状态仍以 `onDownloadComplete` 契约为准；建议对 percent 做钳制并允许重复通知：
+
+```js
+let lastPercent = 0
+
+request.download({
+  url,
+  share: false,
+  onDownLoadNotify(info) {
+    if (!info || typeof info.percent !== 'number') return
+    lastPercent = Math.max(lastPercent, Math.min(100, info.percent))
+    updateProgress(lastPercent)
+  },
+  success({ token }) {
+    console.log('download token:', token)
+  },
+  fail(message, code) {
+    console.error('download failed:', code, message)
+  }
+})
+```
+
+### request.onDownloadComplete(params)
+
+凭 `download` 返回的 `token` 监听/查询下载任务的最终结果。回调风格（success/fail/complete）：任务仍在进行时注册回调、结束时触发；任务已结束时立即返回 Native 侧缓存的结果。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| token | string | 是 | - | `download` 接口成功回调返回的任务标识 |
+| success | function（`dl_cmpl_succ_cb`） | 否 | - | 下载完成回调，签名 `cb(data: dl_cmpl_succ_t)` |
+| fail | function（`dl_cmpl_fail_cb`） | 否 | - | 下载失败/任务不存在回调，签名 `cb(data: string, code: number)` |
+| complete | function（`dl_cmpl_cmpl`） | 否 | - | 结束回调（成功/失败都会调用），无参数 |
+
+**成功返回 / success 回调参数（dl_cmpl_succ_t）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 下载文件的应用相对路径（`internal://` 形式，如 `internal://files/sample.rpk`），可直接传给 `system.file` 等 Feature 使用。官方说明：默认情况下该文件处于应用缓存目录；如果文件类型为图片或者视频且要求用户可以在相册等应用内查看，则需要将该文件转存至公共目录（参考 media 接口中的方法） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 1001 | `FT_ERR_TASK_NOT_EXISTS` | `token is missing` | 未传 `token` |
+| 1001 | `FT_ERR_TASK_NOT_EXISTS` | `task not exist` | token 对应任务不存在（已被清理或从未创建；官方错误码说明：1001 下载任务不存在） |
+| 1000 | `FT_ERR_TASK_FAILED` | 网络层错误描述 | 下载任务执行失败（如连接错误、HTTP 错误等；官方错误码说明：1000 下载失败） |
+| 1002 | `FT_ERR_CANCEL_ERROR_CODE` | `user cancel request` | 任务被取消（如启动新的独占任务导致旧任务取消） |
+
+**示例**
+
+```js
+const request = require('system.request')
+
+// token 来自 request.download 的 success 回调
+request.onDownloadComplete({
+  token: token,
+  success: function (data) {
+    console.log('download finished, file uri =', data.uri)
+  },
+  fail: function (data, code) {
+    console.log('download task fail', code, data)
+  },
+  complete: function  {
+    console.log('onDownloadComplete done')
+  }
+})
+```
+
+完整用法可参考仓库测试：`openvela/frameworks/runtimes/feature/tests/jidl/request_test.js`。
+
+## 相关接口：system.uploadtask 上传任务（官方标准）
+
+> 以下内容来自官方标准文档 官方标准文档（模块名"上传 uploadtask3+"）。openvela 源码实证**未收录** `system.uploadtask` 模块，其方法签名/错误码未经 openvela 源码核实；官方标准文档描述如下，实际可用性以目标固件为准。`system.request` 本身仅提供下载能力，不提供上传。
+
+接口声明：`{ "name": "system.uploadtask" }`，导入：`import uploadtask from '@system.uploadtask'`。
+
+### uploadtask.uploadFile(OBJECT)
+
+创建一个上传请求，每次成功调用 `uploadtask.uploadFile` 将返回本次请求的 `UploadTask` 实例。
+
+| 参数名 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| url | String | 是 | 开发者服务器接口地址 |
+| filePath | String | 是 | 要上传文件资源的路径（本地路径） |
+| name | String | 是 | 文件对应的 key，开发者在服务端可以通过这个 key 获取文件的二进制内容 |
+| header | Object | 否 | 请求的 header，会将其所有属性设置到请求的 header 部分 |
+| formData | Object | 否 | HTTP 请求中其他额外的 form data |
+| timeout | Number | 否 | 超时时间，单位为毫秒 |
+| success | Function | 否 | 成功返回的回调函数 |
+| fail | Function | 否 | 失败的回调函数 |
+| complete | Function | 否 | 结束的回调函数（调用成功、失败都会执行） |
+
+success 返回值：
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| statusCode | Integer | 服务器状态 code |
+| data | String | 开发者服务器返回的数据 |
+| headers | Object | 服务器 response 的所有 header |
+
+### UploadTask 实例方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `UploadTask.abort` | 中断上传任务 |
+| `UploadTask.onProgressUpdate(callback)` | 监听上传进度变化事件。callback 返回 `progress`（上传进度百分比）、`totalBytesSent`（已经上传的数据长度，单位 Bytes）、`totalBytesExpectedToSend`（预期需要上传的数据总长度，单位 Bytes） |
+| `UploadTask.offProgressUpdate(function callback)` | 取消监听上传进度变化事件。callback 可选，不传则取消所有通过 onProgressUpdate 监听的事件；传入指定回调则只取消该回调 |
+
+官方示例：
+
+```js
+const retUploadTask = uploadtask.uploadFile({
+  url: 'http://www.example.com',
+  filePath: 'internal://mass/download/test.png',
+  name: 'testImg',
+  success: function(res) {
+    console.log('Upload success.resp = ' + JSON.stringify(res))
+  },
+  fail: function(data, code) {
+    console.log(`handling fail, errMsg = ${data}`)
+    console.log(`handling fail, errCode = ${code}`)
+  }
+})
+// 中断请求任务
+retUploadTask.abort
+
+// 监听上传进度事件
+retUploadTask.onProgressUpdate(res => {
+  console.log(
+    `listening upload progress update event, progressUpdate data = ${JSON.stringify(res)}`
+  )
+})
+
+// 取消监听上传进度事件
+retUploadTask.offProgressUpdate
+```
+
+官方设备支持明细（uploadtask）：Xiaomi Watch S3 / Xiaomi Watch S4 / REDMI Watch 5 / REDMI Watch 6 / Xiaomi Watch S5 支持；小米 S1 Pro、小米手环 8 Pro/9/9 Pro/10、Redmi Watch 4、小米腕部心电血压记录仪不支持。
+
+## 数据结构
+
+### notify_data_t
+
+下载进度通知数据，由 `onDownLoadNotify` 回调返回。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| result | number（int） | `0`：进度有效；`-1`：文件总大小未知 |
+| percent | number（int） | 下载进度百分比 0~100；总大小未知时为 0 |
+
+### download_succ_t
+
+`download` 成功启动回调的数据。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| token | string | 下载任务标识 |
+
+### dl_cmpl_succ_t
+
+`onDownloadComplete` 成功回调的数据。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| uri | string | 已下载文件的 `internal://` 应用相对路径 |
+
+## 注意事项
+
+- **两段式回调模型**：`download` 的 `success` 仅表示任务启动成功（返回 token）；文件是否下载完成必须通过 `onDownloadComplete` 获取。若调用 `onDownloadComplete` 时任务已结束，Native 侧会直接返回缓存结果（每个 Feature 实例最多缓存最近 **10** 个任务结果，超出后最早的记录被淘汰）。
+- **权限**：`download` 需要 `hapjs.permission.INTERNET` 权限；请求方法固定为 `GET`。
+- **URL 校验**：仅支持 `http://` / `https://`，且 URL 中不能包含空白字符。
+- **文件保存路径**：`filename` 传普通文件名时保存到应用 files 目录；传 `internal://` 路径时按应用沙箱方案（`cache`/`file`/`mass`/`tmp` 等类型目录）解析；不传 `filename` 时从 URL 推导（去掉查询串和末尾 `/` 后取最后一段，且文件名中只能有一个 `.`），推导失败使用默认名 `download_file-<随机数>.txt`。
+- **下载文件位置与相册可见性（官方建议）**：成功返回的 `uri` 默认处于应用缓存目录；图片/视频若需要用户在相册等应用内查看，需转存至公共目录（参考 media 接口）。
+- **share 语义**：`share: false` 的独占任务互斥——启动新的独占任务会取消上一个独占任务（旧任务 fail 回调 code 为 1002）；默认 `share: true` 的任务不受影响。社区资料（洛汐文档库）：`share: true` 是固件默认值，可能改变下载文件的可见范围或后续共享语义；处理敏感文件时可显式设为 `false`。
+- **字段名大小写**：进度回调字段必须严格写作 `onDownLoadNotify`（`DownLoad` 中的 `L` 大写），这是固件 ABI 的一部分（社区资料：洛汐文档库）。
+- **生命周期**：下载任务为全局任务，页面退出/ detach 后任务仍在后台执行，但该页面注册的 JS 回调不再被调用；Feature 销毁（应用退出）时所有请求会被取消并释放。
+- 本模块不提供上传/通用 HTTP 请求能力，这类需求请使用 `system.fetch`；官方另有 `system.uploadtask` 提供上传任务能力（见上文"相关接口"，openvela 实证未收录）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

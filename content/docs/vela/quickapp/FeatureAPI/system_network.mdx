@@ -1,0 +1,222 @@
+---
+title: "system.network 网络状态（Rust 实现）"
+---
+
+> 查询当前网络类型，并订阅网络类型变化通知。官方标准文档中本模块名为"网络信息 network"，用于获取网络类型、监听网络类型变化。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.network` |
+| Feature 类型 | **Rust 实现 Feature**（稳定版；构建开关 `CONFIG_RUST_FEATURE_SYSTEM_NETWORK`，依赖总开关 `CONFIG_FEATURE_RUST_MODULES`） |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.network" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import network from '@system.network'
+// 本仓库运行时/测试中使用的写法
+const network = require('system.network')
+```
+
+## 功能概述
+
+本 Feature 提供三个方法：`getType` 查询当前网络类型、`subscribe` 订阅网络类型变化、`unsubscribe` 取消订阅。网络类型通过 libuv 扩展提供的 C 接口 `uv_netstatus_gettype` 获取（返回值映射为 `wifi`/`bluetooth`/`none`/`ethernet`/`cellular`/`tun`）。订阅功能在 Rust 侧创建 `AF_NETLINK` + `SOCK_RAW` + `NETLINK_ROUTE` 的 netlink 异步 socket 并加入 `RTMGRP_LINK` 组播组，监听链路状态变化（`RTM_NEWLINK`）消息；收到链路事件后重新查询网络类型，**仅当类型发生变化时**才回调 JS。所有异步逻辑运行在 vdk 异步运行时（`vdk::async_runtime`）上。
+
+官方使用建议：网络类型为 `none` 以外的值并不保证设备一定能访问到目标服务器，需要实际发起请求进行判断；`subscribe` 如果多次调用，仅最后一次调用生效。
+
+## API
+
+本模块全部为 **Promise 风格**（JIDL 中 `getType`/`subscribe` 声明为 `promise<T>`，`unsubscribe` 为同步 `void`），不支持 success/fail/complete 回调写法。
+
+> 官方标准文档描述：官方文档中 `getType(OBJECT)`/`subscribe(OBJECT)` 参数表列出了 `success`/`fail`/`complete`（`subscribe` 为 `callback`/`fail`）回调写法，且网络类型取值为 `2g`、`3g`、`4g`、`wifi`、`none`、`5g`、`bluetooth`、`others`。
+
+### network.getType
+
+获取网络类型。每次调用都会实时查询底层网络状态（不做缓存）。
+
+**参数**
+
+无。
+
+**Promise resolve 值（typeResult）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| type | string | 当前网络类型，取值：`"wifi"`、`"bluetooth"`、`"none"`（无网络）、`"ethernet"`、`"cellular"`、`"tun"`（底层枚举值 1~6 依次映射） |
+
+**Promise reject**
+
+- 参数：`(err: { code: number, data: string })`
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 200 | `Failed to get network type` | 底层 `uv_netstatus_gettype` 调用返回非 0（网络状态服务不可用） |
+| 200 | `Unknown network type value: <v>` | 底层返回了无法识别的网络类型枚举值 |
+
+**示例**
+
+```js
+const network = require('system.network')
+
+network.getType.then(ret => {
+  console.log('network type:', ret.type) // 如 "wifi"
+}).catch(err => {
+  console.log('getType fail', err.code, err.data)
+})
+
+// async/await 写法
+async function checkNetwork {
+  try {
+    const ret = await network.getType
+    console.log('network type:', ret.type)
+  } catch (err) {
+    console.log('getType fail', err.code, err.data)
+  }
+}
+checkNetwork
+```
+
+官方示例（回调写法，openvela 实证仅支持 Promise）：
+
+```js
+network.getType({
+  success: function(data) {
+    console.log(`handling success: ${data.type}`)
+  }
+})
+```
+
+### network.subscribe(params)
+
+监听网络类型变化。订阅成功后**会立即回调一次**当前网络类型，此后每当网络链路状态变化导致网络类型改变时再次回调。返回 Promise 在订阅建立成功后 resolve。官方文档说明：如果多次调用，仅最后一次调用生效——实证实现中重复订阅会先停止旧的监听任务并等待其退出后再建立新监听，旧 callback 随之失效，行为一致。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| callback | function | 是 | - | 每次网络发生变化都会被回调，参数为 `typeResult`（同 `getType` 的 resolve 值，含 `type` 字段） |
+
+**Promise resolve 值**
+
+无（`promise<void>`）。
+
+**Promise reject**
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 200 | `param is none` | 未传 params 对象 |
+| 202 | `Callback is null in param!` | params 中未提供有效的 `callback` |
+| 200 | `Failed to create netlink socket: ...` / `Failed to create netlink address: ...` / `Failed to bind netlink socket: ...` | 创建/绑定 netlink socket 失败（系统不支持 netlink 或资源不足） |
+
+**示例**
+
+```js
+const network = require('system.network')
+
+network.subscribe({
+  callback: function (ret) {
+    console.log('network type:', ret.type) // 订阅时立即回调一次，之后类型变化时回调
+  }
+}).then( => {
+  console.log('subscribe ok')
+}).catch(err => {
+  console.log('subscribe fail', err.code, err.data)
+})
+
+// async/await 写法
+async function watchNetwork {
+  await network.subscribe({
+    callback: ret => console.log('network type changed:', ret.type)
+  })
+  console.log('subscribed')
+}
+watchNetwork
+```
+
+官方示例（回调写法，openvela 实证仅支持 Promise）：
+
+```js
+network.subscribe({
+  callback: function(data) {
+    console.log(`handling callback ${data.type}`)
+  }
+})
+```
+
+### network.unsubscribe
+
+取消监听网络类型变化，停止后台监听任务。同步方法，无返回值。
+
+**参数**
+
+无。
+
+**返回值**
+
+无。
+
+**示例**
+
+```js
+const network = require('system.network')
+
+network.unsubscribe
+console.log('unsubscribed')
+```
+
+## 数据结构
+
+### typeResult
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| type | string | 网络类型字符串：`"wifi"` / `"bluetooth"` / `"none"` / `"ethernet"` / `"cellular"` / `"tun"`（底层枚举值 1~6 依次映射） |
+
+### param（subscribe 入参）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| callback | function | `network_subscribe_cb(typeResult type)`，网络类型变化回调 |
+
+## 注意事项
+
+- **Promise 风格**：本模块为 Rust 实现，`getType`/`subscribe` 均为 Promise 风格，没有 success/fail/complete 回调参数。
+- **网络可达性（官方建议）**：网络类型为 `none` 以外的值并不保证设备一定能访问到目标服务器（例如连着不通外网的 Wi-Fi），是否可联网需要实际发起请求进行判断。
+- **订阅回调时机**：`subscribe` 成功后会**立即回调一次**当前网络类型；之后仅在收到 netlink `RTM_NEWLINK` 链路事件**且查询到的网络类型与上一次不同**时才回调（相同类型不重复回调）。若订阅时查询当前网络类型失败，仅记录错误日志，不影响订阅建立。
+- **重复订阅**：对同一 feature 实例再次调用 `subscribe` 时，会先停止旧的监听任务并**等待其退出**后再建立新监听；旧 callback 随之失效（与官方"多次调用仅最后一次生效"一致）。
+- **unsubscribe 语义**：`unsubscribe` 只发送停止信号，不等待监听任务退出即返回；停止后可再次 `subscribe`。
+- **平台依赖**：依赖 libuv 扩展的 `uv_netstatus_gettype` 接口与内核 netlink route 支持（`AF_NETLINK`/`RTMGRP_LINK`）；底层不支持时 `getType` 以 code 200 reject、`subscribe` 以 code 200 reject。官方文档亦提到 fail 回调可能是因为缺乏权限。
+- 错误码 200/202 对应 Feature 框架的 `FT_ERR_GENERAL`（通用错误）与 `FT_ERR_ARGS`（参数错误）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

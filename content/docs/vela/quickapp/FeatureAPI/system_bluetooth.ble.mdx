@@ -1,0 +1,1063 @@
+---
+title: "system.bluetooth.ble BLE 低功耗蓝牙"
+---
+
+> 提供 BLE（Bluetooth Low Energy）广播、扫描与 GATT 客户端能力。该模块为 **v2.0 异步版本**（`module system.bluetooth.ble@2.0`），仅在 `CONFIG_BLUETOOTH_FEATURE_ASYNC` 构建中注册；所有异步方法均为 Promise 风格，广播器/扫描器/GATT 客户端以接口对象（interface）形式创建和使用。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.bluetooth.ble` |
+| Feature 类型 | 标准 Feature |
+| 接口声明 | `{ "name": "system.bluetooth.ble" }` |
+| 所需权限 | 无 |
+| 构建开关 | 随 `CONFIG_BLUETOOTH_FEATURE_ASYNC` 注册；子能力分别由 `CONFIG_BLUETOOTH_BLE_ADV`（广播）、`CONFIG_BLUETOOTH_BLE_SCAN`（扫描）、`CONFIG_BLUETOOTH_GATT`（GATT 客户端）裁剪 |
+| 后台运行 | 官方限制：**禁止后台运行** |
+| Native 头文件 | `openvela/frameworks/connectivity/bluetooth/feature/feature_async/include/feature_bluetooth.h` |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import ble from '@system.bluetooth.ble'
+// 本仓库运行时/测试中使用的写法
+const ble = require('system.bluetooth.ble')
+```
+
+官方文档示例中也写作 `import bluetoothBLE from '@system.bluetooth.ble'` 或 `const bluetoothBLE = require("@system.bluetooth.ble")`，别名不影响功能。
+
+## 功能概述
+
+该模块面向 BLE 中央/外围场景，提供三类接口对象（均由模块工厂方法创建，使用完需调用各自的 `close` 释放）：
+
+- **Advertiser（广播器）**：`createAdvertiser` 创建，用于启动/停止 BLE 广播（可携带服务 UUID、厂商数据、服务数据，支持可连接/不可连接广播）。
+- **Scanner（扫描器）**：`createScanner` 创建，用于启动/停止 BLE 扫描、查询扫描状态、订阅设备发现结果。官方文档将 `createScanner` 描述为"初始化蓝牙模块"——它创建并返回一个 Scanner 实例，后续扫描相关能力都在该实例上调用。
+- **GattClient（GATT 客户端，官方文档称 GattClientDevice）**：`createGattClientDevice(deviceId, addressType)` 针对某个远端设备创建，用于连接/断开、发现服务、读写特征值与描述符、设置 MTU、订阅 notify/indicate，并通过事件接收连接状态与特征值变化通知。
+
+Native 层通过蓝牙框架的 `bt_le_advertiser` / `bt_le_scan` / `bt_gatt_feature` 异步接口（`*_async` 系列）经 IPC 与蓝牙服务通信，回调在 libuv 事件循环上触发，结果以 Promise 兑现或事件（`event`）上抛。JIDL 中 `object` 类型的二进制数据字段（如 `characteristicValue`、扫描结果 `data`）在 JS 侧为 **ArrayBuffer**。
+
+> **官方标准文档描述**：官方《蓝牙 bluetooth》文档中，本模块各方法以 OBJECT 参数 + `success` / `fail` / `complete` 回调的形式调用（`fail(data, code)` 第二个参数为错误码）；openvela 实证 v2.0（`system.bluetooth.ble@2.0`）全部为 Promise 风格，`.then` / `.catch` 分别对应成功/失败路径，错误信息与错误码从 reject 中获取（以本文实证为准）。
+
+**社区补充（洛汐文档库）**：官网已公开 `system.bluetooth.ble` 的 Scanner 与 GATT Client 能力；广播器（`createAdvertiser` 及 advertiser 实例）在官网快照中未收录，由社区资料补充。此外 `system.bluetooth` 模块提供 `getAddressAsync(callback)`（回调返回本机蓝牙地址字符串，原生入口严格要求一个函数类型参数；失败时可能不回调，业务侧应设置超时），可用于读取本机蓝牙地址——该方法属于 `system.bluetooth`（经典蓝牙）模块，不属于本模块；蓝牙 MAC 属于设备标识，预装汽车应用需同时声明 `hapjs.permission.DEVICE_INFO`，普通应用即使能导入 Feature 也可能被权限或系统签名策略拒绝。
+
+---
+
+## API
+
+### 模块工厂方法
+
+#### ble.createAdvertiser
+
+创建一个 BLE 广播器对象（Advertiser 接口实例）。社区资料确认该实例提供 `startAdvertising` 与 `stopAdvertising` 方法；openvela 实证版本还提供 `close`。
+
+**参数**：无。
+
+**返回**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| Advertiser object | 广播器实例；未启用 `CONFIG_BLUETOOTH_BLE_ADV` 时返回空（null） |
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const advertiser = ble.createAdvertiser
+console.log('advertiser =', advertiser)
+```
+
+#### ble.createScanner
+
+创建一个 BLE 扫描器对象（Scanner 接口实例）。官方文档将本方法描述为"初始化蓝牙模块"，返回 Scanner 实例后即可在其上发起扫描。
+
+**参数**：无。
+
+**返回**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| Scanner object | 扫描器实例；未启用 `CONFIG_BLUETOOTH_BLE_SCAN` 时返回空（null） |
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+console.log('scanner =', scanner)
+```
+
+#### ble.createGattClientDevice(deviceId, addressType)
+
+创建一个 GattClientDevice（GATT 通用属性协议客户端）实例，用于与指定远端 BLE 设备通信。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| deviceId | string | 是 | - | 对端设备 MAC 地址字符串，形如 `"XX:XX:XX:XX:XX:XX"`（Native 用 `bt_addr_str2ba` 解析，解析失败返回空） |
+| addressType | string | 否 | `"UNKNOWN"` | 设备地址类型：`"PUBLIC"` / `"RANDOM"` / `"ANONYMOUS"` / `"UNKNOWN"`；其他值按 `"UNKNOWN"` 处理 |
+
+**返回**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| GattClient object | GATT 客户端实例；`deviceId` 非法或未启用 `CONFIG_BLUETOOTH_GATT` 时返回空（null） |
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+console.log('gattc =', gattc)
+```
+
+---
+
+### Advertiser 接口（广播器）
+
+#### advertiser.startAdvertising(params)
+
+启动 BLE 广播。Promise 在广播成功启动后 resolve；参数非法、资源不足或底层启动失败时 reject。
+
+**参数（StartAdvertisingParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| setting | AdvertiseSetting | 是 | - | 广播设置（间隔、发射功率、是否可连接） |
+| advData | AdvertiseData | 是 | - | 广播数据 |
+| advResponse | AdvertiseData | 否 | `null` | 扫描响应数据（Scan Response），不传则不发扫描响应 |
+
+**Promise resolve 值**：无（`promise<void>`）。
+
+**Promise reject**
+
+- 参数：`(data: string, code: number)`。
+- 错误信息：参数/启动失败为 `"start advertising failed!"`；固件未编译广播能力时为 `"advertising is not supported."`。
+- 错误码：见文末【错误码】表。Native 参数校验失败返回 `202`（`FT_ERR_ARGS`）；同一广播器上一次启动尚未完成时重复调用返回 `205`（`FT_ERR_DUPLICATE_SUBMISSION`）。
+
+**字段语义补充（社区补充（洛汐文档库））**
+
+- `setting.interval`（必填）：广播间隔。社区资料提示"数值单位由蓝牙后端定义，不要直接套用毫秒"；openvela 实证单位为 BLE 广播间隔单位（0.625ms），取值 `0x0020`(32) ~ `0x4000`(16384)。
+- `setting.txPower`（可选）：发射功率。社区资料描述为"枚举或档位，由产品蓝牙栈解释"；openvela 实证为 dBm 数值，范围 `-20` ~ `10`。
+- `setting.connectable`（可选）：是否可连接。
+
+> 社区补充（洛汐文档库）称：当前接口只支持不可连接广播，`connectable` 传 `true` 会被忽略。openvela 实证行为：`connectable` 字段生效，`true` 为可连接广播（ADV_IND）、`false` 为不可连接广播（NONCONN_IND），以本文实证为准。
+
+- `advData.serviceUuids`（可选）：广播中的 Service UUID 列表。
+- `advData.serviceData`：服务数据列表，每项含 `serviceUuid`（UUID 字符串）与 `serviceValue`（ArrayBuffer 二进制内容）。
+
+> 社区补充（洛汐文档库）基于商业版接口给出的约束为：`advData.serviceData` 必填且至少一项、空数组会报错，预装应用使用 128 位 UUID。openvela 实证版本中 `advData` 的 `serviceUuids` / `manufactureData` / `serviceData` 三个字段均可选，但厂商/服务数据长度须大于 0；广播数据中的 UUID 仅接受 16 位 UUID 展开格式（见【注意事项】），以本文实证为准。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const advertiser = ble.createAdvertiser
+
+// 广播中携带的厂商数据 / 服务数据为 ArrayBuffer
+const manufactureValue = new Uint8Array([0x01, 0x02, 0x03]).buffer
+const serviceValue = new Uint8Array([0xDE, 0xAD]).buffer
+
+advertiser.startAdvertising({
+  setting: {
+    interval: 160,      // 0x0020 ~ 0x4000（32 ~ 16384），BLE 广播间隔单位（0.625ms）
+    txPower: 0,         // -20 ~ 10（dBm）
+    connectable: true   // true：可连接广播（ADV_IND）；false：不可连接（NONCONN_IND）
+  },
+  advData: {
+    serviceUuids: ['0000180D-0000-1000-8000-00805F9B34FB'], // 仅支持 16 位 UUID 展开格式
+    manufactureData: [
+      { manufactureId: '0000FFFF-0000-1000-8000-00805F9B34FB', manufactureValue: manufactureValue }
+    ],
+    serviceData: [
+      { serviceUuid: '0000FE9F-0000-1000-8000-00805F9B34FB', serviceValue: serviceValue }
+    ]
+  },
+  advResponse: null
+}).then(function  {
+  console.log('广播已启动')
+}).catch(function (err) {
+  console.log('启动广播失败：', err)
+})
+```
+
+> 官方/社区文档中的回调写法为 `startAdvertising({ setting, advData, success {}, fail(data, code) {}, complete {} })`；openvela v2.0 不接收 `success/fail/complete` 字段，结果以 Promise 返回（以本文实证为准）。
+
+#### advertiser.stopAdvertising
+
+停止 BLE 广播。无返回值（fire-and-forget）；当前未在广播时为空操作。
+
+**社区补充（洛汐文档库）使用建议**：页面隐藏、应用退出或登录二维码等广播场景失效时，**必须**主动调用 `stopAdvertising` 停止广播，不要依赖垃圾回收释放蓝牙资源。
+
+**参数**：无。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const advertiser = ble.createAdvertiser
+advertiser.startAdvertising({
+  setting: { interval: 160, txPower: 0, connectable: false },
+  advData: { serviceUuids: ['0000180D-0000-1000-8000-00805F9B34FB'] }
+}).then(function  {
+  // 5 秒后停止广播
+  setTimeout(function  {
+    advertiser.stopAdvertising
+  }, 5000)
+}).catch(function (err) {
+  console.log('失败：', err)
+})
+```
+
+#### advertiser.close
+
+关闭广播器：停止广播并释放 Native 资源。关闭后该实例不应再使用。无返回值。
+
+**参数**：无。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const advertiser = ble.createAdvertiser
+// ... 使用完毕
+advertiser.stopAdvertising
+advertiser.close
+```
+
+---
+
+### Scanner 接口（扫描器）
+
+#### scanner.startBLEScan(params)
+
+发起 BLE 扫描流程。扫描结果通过 `subscribeBLEDeviceFind` 订阅的回调上报；Promise 仅表示扫描启动成功/失败。
+
+**参数（StartScanParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| filters | ScanFilter[] | 否 | - | 扫描过滤条件数组，可按设备地址 / 设备名 / 服务 UUID 过滤（字段语义见【数据结构 ScanFilter】）。**JIDL 中声明，当前 Native 实现未读取该字段（不做过滤），所有结果均上报**（具体以 Native 实现为准） |
+| options | ScanOptions | 否 | `null` | 扫描选项；不传时使用默认配置（低功耗模式、被动扫描、1M PHY） |
+
+**Promise resolve 值**：无（`promise<void>`）。
+
+**Promise reject**
+
+- 参数：`(data: string, code: number)`。
+- 错误信息：启动失败为 `"start scan failed!"`；固件未编译扫描能力时为 `"scanner is not supported"`。
+- 错误码：参数缺失返回 `202`；扫描已在进行/启动中重复调用返回 `205`；其余见【错误码】表。
+
+> **官方标准文档描述**：`filters` 为**必填**参数，且 `filters` / `options` 与 `success` / `fail` / `complete` 一起作为 OBJECT 字段传入。openvela 实证 v2.0：`filters` 为可选，且当前 Native 实现不读取该字段（不过滤任何设备），方法返回 Promise（以本文实证为准）。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+
+// 先订阅设备发现，再启动扫描
+const subscribeId = scanner.subscribeBLEDeviceFind({
+  callback: function (result) {
+    // result 为 ScanResult[]，每次上报数组中含 1 条结果
+    result.forEach(function (device) {
+      console.log('发现设备：', device.deviceId,
+        'rssi =', device.rssi,
+        'addressType =', device.addressType,
+        'rawData =', new Uint8Array(device.data))
+    })
+  },
+  fail: function  {
+    console.log('订阅设备发现失败')
+  }
+})
+console.log('subscribeId =', subscribeId)
+
+scanner.startBLEScan({
+  filters: [], // 当前 Native 实现不使用过滤条件
+  options: {
+    dutyMode: 1, // 0=低功耗 1=均衡 2=低延迟（见 ScanDuty 常量）；默认 0
+    interval: 0  // JIDL 中声明，当前 Native 实现未使用该字段
+  }
+}).then(function  {
+  console.log('扫描已启动')
+}).catch(function (err) {
+  console.log('启动扫描失败：', err)
+})
+```
+
+官方示例中的过滤写法（v2.0 中 `filters` 字段当前不生效，仅作参考）：
+
+```js
+scanner.startBLEScan({
+  filters: [
+    { deviceId: 'XX:XX:XX:XX:XX:XX', name: 'test',
+      serviceUuid: '00001888-0000-1000-8000-00805f9b34fb' }
+  ],
+  options: { dutyMode: 0 } // SCAN_MODE_LOW_POWER
+})
+```
+
+#### scanner.stopBLEScan
+
+停止 BLE 扫描流程。无返回值；当前未在扫描时为空操作。
+
+**参数**：无。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+scanner.startBLEScan({}).then(function  {
+  setTimeout(function  {
+    scanner.stopBLEScan
+    console.log('已停止扫描')
+  }, 10000)
+}).catch(function (err) {
+  console.log('失败：', err)
+})
+```
+
+#### scanner.getScanState
+
+获得当前 Scanner 的扫描状态。
+
+**参数**：无。
+
+**Promise resolve 值（ScanStateParams）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| scanState | number | 扫描状态：`0` 未扫描（`STATE_NON_SCAN`，本地未开始扫描周围设备），`1` 扫描中（`STATE_SCANING`，本地正在扫描周围设备），见 ScanState 常量 |
+
+> 官方文档中本方法以 `getScanState({ success(data) { data.scanState }, fail(data, code) {}, complete {} })` 形式调用；v2.0 中 scanState 从 Promise resolve 值获取（以本文实证为准）。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+scanner.getScanState.then(function (state) {
+  console.log('扫描状态：', state.scanState) // 0 或 1
+}).catch(function (err) {
+  console.log('查询失败：', err)
+})
+```
+
+#### scanner.subscribeBLEDeviceFind(params)
+
+订阅 BLE 设备发现上报事件。每发现一个设备，Native 以**单元素数组**形式调用 `callback`。
+
+**参数（DeviceFindParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| callback | function | 是 | - | 结果回调 `deviceFoundResult(result: ScanResult[])`，参数为扫描结果上报数据数组 |
+| fail | function | 否 | - | 失败回调 `deviceFindFail`，无参数；**仅在未传 callback 时立即触发一次**，正常扫描过程中 Native 不会调用（源码注释 "actually not used"） |
+
+**返回**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| number | 订阅 ID（SubscribeId，从 1 开始递增）；扫描器已关闭或未传 callback 时返回 `-1` |
+
+> **官方标准文档描述**：`callback` 为可选参数。openvela 实证 v2.0：`callback` 必填；未传 callback 时立即触发一次 `fail` 且订阅返回 `-1`（以本文实证为准）。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+const subscribeId = scanner.subscribeBLEDeviceFind({
+  callback: function (result) {
+    var device = result[0]
+    console.log('deviceId:', device.deviceId)
+    console.log('rssi:', device.rssi)
+    console.log('addressType:', device.addressType) // PUBLIC / RANDOM / ANONYMOUS / UNKNOWN
+  },
+  fail: function  {
+    console.log('订阅失败')
+  }
+})
+```
+
+#### scanner.unsubscribeBLEDeviceFind(subscribeId)
+
+取消订阅 BLE 设备发现上报事件。无返回值；传入不存在的 ID 时为空操作。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| SubscribeId | number | 是 | `subscribeBLEDeviceFind` 返回的订阅 ID |
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+const subscribeId = scanner.subscribeBLEDeviceFind({
+  callback: function (result) { console.log(result[0].deviceId) }
+})
+
+// 稍后取消订阅
+scanner.unsubscribeBLEDeviceFind(subscribeId)
+```
+
+#### scanner.close
+
+关闭 Scanner 功能：停止扫描、移除全部设备发现订阅并释放 Native 资源。官方文档明确：调用该接口后 Scanner 实例将不能再使用。无返回值。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const scanner = ble.createScanner
+// ... 使用完毕
+scanner.stopBLEScan
+scanner.close
+```
+
+---
+
+### GattClient 接口（GATT 客户端 / GattClientDevice）
+
+> GattClient 实例由 `ble.createGattClientDevice(deviceId, addressType)` 创建。除 `close` 与两个事件外，其余方法均返回 Promise；**读写/发现服务/MTU/notify 等操作要求连接处于已连接（CONNECTED）状态**，否则 Promise 会 reject。
+>
+> 官方文档对写操作类 `success` 回调的语义说明为"client 端发送指令成功后回调（**非服务端成功**）"；v2.0 中 Promise 在底层异步操作完成后兑现，`.then` 表示该 GATT 操作已完成，业务上的"对端数据已生效"仍应以对端设备行为或 notify 为准。
+
+#### gattc.connect
+
+client 端发起连接远端 BLE 设备（首次调用会先创建 GATT 客户端再发起连接）。连接过程中状态机迁移会通过 `onBLEConnectionStateChange` 事件上报。
+
+**参数**：无。
+
+**Promise resolve 值**：无（连接成功建立）。
+
+**Promise reject**
+
+- 错误信息：`"gattc connect failed!"` / `"gattc create connect failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- 已在连接中/已连接时重复调用返回 `205`（`FT_ERR_DUPLICATE_SUBMISSION`）。
+
+> **官方标准文档描述**：`connect` 的 `success` 回调是"client 端发送指令成功后回调（**非连接成功**）"，连接结果需通过 `onBLEConnectionStateChange` 事件判断。openvela v2.0 的 Promise 在连接成功建立后才 resolve、失败则 reject，同时状态迁移仍会通过事件上报（以本文实证为准）。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+
+gattc.onBLEConnectionStateChange = function (state) {
+  console.log('连接状态变化：', state) // 0=已断开 1=连接中 2=已连接 3=断开中
+}
+
+gattc.connect.then(function  {
+  console.log('已连接')
+}).catch(function (err) {
+  console.log('连接失败：', err)
+})
+```
+
+#### gattc.disconnect
+
+client 端断开与远端蓝牙低功耗设备的连接。若当前已是断开状态，Promise 直接 resolve；若处于连接中/断开中等中间状态，Promise reject。
+
+**参数**：无。
+
+**Promise resolve 值**：无。
+
+**Promise reject**
+
+- 错误信息：`"gattc disconnect failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.disconnect
+}).then(function  {
+  console.log('已断开连接')
+}).catch(function (err) {
+  console.log('失败：', err)
+})
+```
+
+#### gattc.getServices
+
+client 端获取远端蓝牙低功耗设备的所有服务，即**服务发现**（含服务下的特征值、描述符与属性）。必须在已连接状态调用。
+
+**参数**：无。
+
+**Promise resolve 值**：`GattService[]`（结构见【数据结构】）。
+
+**Promise reject**
+
+- 错误信息：`"gattc get service failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- 未连接时调用返回 `200`（`FT_ERR_GENERAL`）。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.getServices
+}).then(function (services) {
+  services.forEach(function (service) {
+    console.log('service:', service.serviceUuid, 'isPrimary:', service.isPrimary)
+    service.characteristics.forEach(function (ch) {
+      console.log('  characteristic:', ch.characteristicUuid,
+        'read:', ch.properties.read, 'write:', ch.properties.write,
+        'notify:', ch.properties.notify)
+    })
+  })
+}).catch(function (err) {
+  console.log('获取服务失败：', err)
+})
+```
+
+#### gattc.readCharacteristicValue(params)
+
+client 端读取远端蓝牙低功耗设备特定服务的特征值。必须在已连接状态调用。
+
+**参数（ReadCharacteristicValue）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 是 | 待读取的特征值，需提供 `serviceUuid` 与 `characteristicUuid`（均为 128 位标准 UUID 字符串，36 字符） |
+
+**Promise resolve 值**：`BLECharacteristic`（含 `characteristicValue` ArrayBuffer、`descriptors`、`properties`，结构见【数据结构】），服务端返回数据后兑现。
+
+**Promise reject**
+
+- 错误信息：异步读取失败为 `"gattc read characteristic failed!"`；未连接/参数非法等立即失败路径 Native 返回 `"gattc write characteristic failed!"`（源码字符串，以 Native 实现为准）；不支持时为 `"gattc is not supported."`。
+- UUID 格式非法返回 `202`；未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.readCharacteristicValue({
+    characteristic: {
+      serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '00002A19-0000-1000-8000-00805F9B34FB'
+    }
+  })
+}).then(function (characteristic) {
+  console.log('读到的值：', new Uint8Array(characteristic.characteristicValue))
+}).catch(function (err) {
+  console.log('读特征值失败：', err)
+})
+```
+
+#### gattc.readDescriptorValue(params)
+
+client 端读取远端蓝牙低功耗设备特定特征值包含的描述符。必须在已连接状态调用。
+
+**参数（ReadDescriptorValue）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| descriptor | BLEDescriptor | 是 | 待读取的描述符，需提供 `serviceUuid`、`characteristicUuid`、`descriptorUuid`（均为 128 位标准 UUID 字符串） |
+
+**Promise resolve 值**：`BLEDescriptor`（含 `descriptorValue` ArrayBuffer）。
+
+**Promise reject**
+
+- 错误信息：`"gattc read descriptor failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- UUID 格式非法返回 `202`；未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.readDescriptorValue({
+    descriptor: {
+      serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '00002A19-0000-1000-8000-00805F9B34FB',
+      descriptorUuid: '00002902-0000-1000-8000-00805F9B34FB'
+    }
+  })
+}).then(function (descriptor) {
+  console.log('描述符值：', new Uint8Array(descriptor.descriptorValue))
+}).catch(function (err) {
+  console.log('读描述符失败：', err)
+})
+```
+
+#### gattc.writeCharacteristicValue(params)
+
+client 端向远端蓝牙低功耗设备写入特定服务的特征值（`characteristic` 携带二进制值及其它参数）。必须在已连接状态调用。
+
+**参数（WriteCharacteristicValue）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 是 | 需提供 `serviceUuid`、`characteristicUuid`（128 位 UUID）、`characteristicValue`（ArrayBuffer）；**`descriptors` 字段也需传入（可为空数组）**，Native 会直接遍历该字段 |
+
+**Promise resolve 值**：无。
+
+**Promise reject**
+
+- 错误信息：`"gattc write characteristic failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- UUID 格式非法返回 `202`；未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.writeCharacteristicValue({
+    characteristic: {
+      serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '00002A19-0000-1000-8000-00805F9B34FB',
+      characteristicValue: new Uint8Array([0x01, 0x00]).buffer,
+      descriptors: [] // Native 会遍历该字段，请传入数组（可为空）
+    }
+  })
+}).then(function  {
+  console.log('写特征值成功')
+}).catch(function (err) {
+  console.log('写特征值失败：', err)
+})
+```
+
+#### gattc.writeDescriptorValue(params)
+
+client 端向远端蓝牙低功耗设备特定的描述符写入二进制数据。必须在已连接状态调用。
+
+**参数（WriteDescriptorValue）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| descriptor | BLEDescriptor | 是 | 需提供 `serviceUuid`、`characteristicUuid`、`descriptorUuid`（128 位 UUID）与 `descriptorValue`（ArrayBuffer） |
+
+**Promise resolve 值**：无。
+
+**Promise reject**
+
+- 错误信息：`"gattc write descriptor failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- UUID 格式非法返回 `202`；未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.writeDescriptorValue({
+    descriptor: {
+      serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '00002A19-0000-1000-8000-00805F9B34FB',
+      descriptorUuid: '00002902-0000-1000-8000-00805F9B34FB',
+      descriptorValue: new Uint8Array([0x01, 0x00]).buffer
+    }
+  })
+}).then(function  {
+  console.log('写描述符成功')
+}).catch(function (err) {
+  console.log('写描述符失败：', err)
+})
+```
+
+#### gattc.setBLEMtuSize(params)
+
+client 与远端蓝牙低功耗设备协商（交换）ATT 最大传输单元（Maximum Transmission Unit, MTU）。**必须在 `connect` 连接成功后才能使用**。
+
+**参数（SetBLEMtuSize）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| mtu | number(int) | 是 | 期望协商的 MTU 值。官方文档给出取值范围 **22 ~ 512** |
+
+**Promise resolve 值**：无（MTU 协商完成）。
+
+**Promise reject**
+
+- 错误信息：异步失败为 `"gattc mtu failed!"`；立即失败路径为 `"gattc set mtu failed!"`（源码字符串，以 Native 实现为准）；不支持时为 `"gattc is not supported."`。
+- 未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+gattc.connect.then(function  {
+  return gattc.setBLEMtuSize({ mtu: 247 })
+}).then(function  {
+  console.log('MTU 协商完成')
+}).catch(function (err) {
+  console.log('设置 MTU 失败：', err)
+})
+```
+
+#### gattc.setNotifyCharacteristicChanged(params)
+
+向服务端发送设置通知的请求：开启/关闭指定特征值的 notify/indicate 订阅。`enable` 为 `true` 时启用接收 notify，`false` 关闭。开启后，远端上报的通知通过 `onBLECharacteristicChange` 事件送达。必须在已连接状态调用。
+
+**参数（SetNotifyCharChangedParams）**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 是 | 需提供 `serviceUuid` 与 `characteristicUuid`（128 位 UUID） |
+| enable | boolean | 是 | `true` 开启订阅，`false` 关闭 |
+
+**Promise resolve 值**：无（订阅/退订完成）。
+
+**Promise reject**
+
+- 错误信息：`"gattc set notify failed!"`；固件未编译 GATT 能力时为 `"gattc is not supported."`。
+- UUID 格式非法返回 `202`；未连接返回 `200`。
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+
+// 先注册特征值变化事件
+gattc.onBLECharacteristicChange = function (characteristic) {
+  console.log('notify：', characteristic.characteristicUuid,
+    new Uint8Array(characteristic.characteristicValue))
+}
+
+gattc.connect.then(function  {
+  return gattc.setNotifyCharacteristicChanged({
+    characteristic: {
+      serviceUuid: '0000180D-0000-1000-8000-00805F9B34FB',
+      characteristicUuid: '00002A19-0000-1000-8000-00805F9B34FB'
+    },
+    enable: true
+  })
+}).then(function  {
+  console.log('notify 已开启')
+}).catch(function (err) {
+  console.log('开启 notify 失败：', err)
+})
+```
+
+#### gattc.close
+
+关闭客户端功能：若仍处于连接状态则先异步断开，并删除 Native GATT 客户端（注销 client 在协议栈的注册）、释放资源。官方文档明确：调用该接口后 GattClientDevice 实例将不能再使用。
+
+**参数**：无。
+
+**返回**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| boolean | 关闭成功返回 `true`；固件未编译 GATT 能力时返回 `false` |
+
+**示例**
+
+```js
+const ble = require('system.bluetooth.ble')
+
+const gattc = ble.createGattClientDevice('12:34:56:78:9A:BC', 'PUBLIC')
+// ... 使用完毕
+gattc.close
+```
+
+#### 事件（event）
+
+GattClient 接口在 JIDL 中定义了两个事件，JS 侧通过在实例上赋值同名函数注册回调（赋值后 Native 事件即派发到该回调；不注册则 Native 不上抛）。
+
+**onBLEConnectionStateChange(state)**
+
+client 端订阅蓝牙低功耗设备的连接状态变化事件。
+
+| 参数 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| state | number(int) | 新连接状态，取值见 BLEConnectionState / ProfileConnectionState 常量：`0` 已断开（profile 已断连） / `1` 连接中（profile 正在连接） / `2` 已连接（profile 已连接） / `3` 断开中（profile 正在断连） |
+
+```js
+gattc.onBLEConnectionStateChange = function (state) {
+  console.log('连接状态：', state)
+}
+```
+
+**onBLECharacteristicChange(characteristic)**
+
+订阅蓝牙低功耗设备的特征值变化事件：已订阅（notify/indicate）特征值收到远端通知时触发。**需要先调用 `setNotifyCharacteristicChanged` 接口开启订阅，才能接收 server 端的通知。**
+
+| 参数 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 发生变化的特征值，`characteristicValue`（ArrayBuffer）为通知携带的数据 |
+
+```js
+gattc.onBLECharacteristicChange = function (characteristic) {
+  console.log('特征值变化：', characteristic.serviceUuid,
+    characteristic.characteristicUuid,
+    new Uint8Array(characteristic.characteristicValue))
+}
+```
+
+---
+
+## 常量
+
+JIDL 中以 `const` 定义的枚举（JS 侧按数值使用）：
+
+**ScanDuty（扫描模式，ScanOptions.dutyMode）**
+
+| 常量名 | 值 | 说明 |
+| ---- | ---- | ---- |
+| SCAN_MODE_LOW_POWER | 0 | 低功耗模式（默认值） |
+| SCAN_MODE_BALANCED | 1 | 均衡模式 |
+| SCAN_MODE_LOW_LATENCY | 2 | 低延迟模式 |
+
+**ScanState（扫描状态，getScanState 返回）**
+
+| 常量名 | 值 | 说明 |
+| ---- | ---- | ---- |
+| STATE_NON_SCAN | 0 | 本地未开始扫描周围设备 |
+| STATE_SCANING | 1 | 本地正在扫描周围设备 |
+
+**ProfileConnectionState / BLEConnectionState（GATT 连接状态，onBLEConnectionStateChange 事件）**
+
+| 常量名 | 值 | 说明 |
+| ---- | ---- | ---- |
+| STATE_DISCONNECTED | 0 | profile 已断连（已断开） |
+| STATE_CONNECTING | 1 | profile 正在连接（连接中） |
+| STATE_CONNECTED | 2 | profile 已连接（已连接） |
+| STATE_DISCONNECTING | 3 | profile 正在断连（断开中） |
+
+## 数据结构
+
+### AdvertiseSetting（广播设置）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| interval | number(int) | 广播间隔，取值范围 `0x0020`(32) ~ `0x4000`(16384)，超出范围返回参数错误；BLE 广播间隔单位（0.625ms，即约 20ms ~ 10.24s） |
+| txPower | number(int) | 发射功率，取值范围 `-20` ~ `10`（dBm），超出范围返回参数错误 |
+| connectable | boolean | 是否可连接：`true` 可连接广播（ADV_IND），`false` 不可连接广播（NONCONN_IND） |
+
+### ManufactureData（厂商数据）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| manufactureId | string | 厂商 ID，字符串形式，Native 按 16 位 UUID 展开格式（`"0000XXXX-0000-1000-8000-00805F9B34FB"`，大小写不敏感）解析出 16 位数值 |
+| manufactureValue | object(ArrayBuffer) | 厂商自定义数据，ArrayBuffer；长度须大于 0 |
+
+### ServiceData（服务数据）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serviceUuid | string | 服务 UUID，16 位 UUID 展开格式（`"0000XXXX-0000-1000-8000-00805F9B34FB"`） |
+| serviceValue | object(ArrayBuffer) | Service Data 二进制内容，ArrayBuffer；长度须大于 0 |
+
+### AdvertiseData（广播数据）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serviceUuids | string[] | 服务 UUID 列表，元素为 16 位 UUID 展开格式字符串 |
+| manufactureData | ManufactureData[] | 厂商数据列表 |
+| serviceData | ServiceData[] | 服务数据列表 |
+
+### StartAdvertisingParams（startAdvertising 参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| setting | AdvertiseSetting | 广播设置（必填） |
+| advData | AdvertiseData | 广播数据（必填） |
+| advResponse | AdvertiseData | 扫描响应数据，可选（默认 `null`） |
+
+### ScanFilter（扫描过滤条件）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| deviceId | string | 过滤的 BLE 设备地址，例如 `"XX:XX:XX:XX:XX:XX"`（JIDL 声明，当前 Native 实现未使用） |
+| name | string | 过滤的 BLE 设备名（JIDL 声明，当前 Native 实现未使用） |
+| serviceUuid | string | 过滤包含该 UUID 服务的设备，例如 `00001888-0000-1000-8000-00805f9b34fb`（JIDL 声明，当前 Native 实现未使用） |
+
+### ScanOptions（扫描选项）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| interval | number(int) | 扫描间隔（JIDL 声明，当前 Native 实现未使用） |
+| dutyMode | number(int) | 扫描模式，取 ScanDuty 常量值（0/1/2）；不传默认为 0（低功耗 SCAN_MODE_LOW_POWER） |
+
+### StartScanParams（startBLEScan 参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| filters | ScanFilter[] | 过滤条件数组（当前 Native 实现不做过滤） |
+| options | ScanOptions | 扫描选项，可选（默认 `null`，即低功耗/被动扫描/1M PHY） |
+
+### ScanResult（扫描结果上报数据）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| deviceId | string | 扫描到的设备地址，形如 `"XX:XX:XX:XX:XX:XX"` |
+| rssi | number(int) | 扫描到的设备的 RSSI 信号强度值（dBm） |
+| data | object(ArrayBuffer) | 扫描到的设备发送的广播包（原始广播数据 raw advertising data），ArrayBuffer |
+| addressType | string | 设备地址类型：`"PUBLIC"` / `"RANDOM"` / `"ANONYMOUS"` / `"UNKNOWN"` |
+
+### DeviceFindParams（subscribeBLEDeviceFind 参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| callback | function | 结果回调 `(result: ScanResult[]) => void`，每次上报数组含 1 条 ScanResult |
+| fail | function | 失败回调 ` => void`，仅在未传 callback 时立即触发一次 |
+
+### ScanStateParams（getScanState 返回）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| scanState | number(int) | 扫描状态，取 ScanState 常量值（0/1） |
+
+### BLEDescriptor（GATT 描述符）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serviceUuid | string | 所属服务 UUID（128 位标准 UUID 字符串，如 `00002902-0000-1000-8000-00805f9b34fb`） |
+| characteristicUuid | string | 所属特征值 UUID（128 位标准 UUID 字符串） |
+| descriptorUuid | string | 描述符 UUID（128 位标准 UUID 字符串） |
+| descriptorValue | object(ArrayBuffer) | 描述符对应的二进制值，ArrayBuffer |
+
+### GattProperties（GATT 特征值属性描述）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| read | boolean | 该特征值是否支持 read 操作（是否可读） |
+| write | boolean | 该特征值是否支持 write 操作；`true` 表示需要对端设备回复的写 |
+| writeNoResponse | boolean | 该特征值是否支持 Write Without Response（无响应写）；`true` 表示支持写操作且无需对端设备回复 |
+| notify | boolean | 该特征值是否支持 notify 操作；`true` 表示该特征可通知对端设备（无需回复） |
+| indicate | boolean | 该特征值是否支持 indicate 操作；`true` 表示该特征可通知对端设备，且需要对端设备回复 |
+
+### BLECharacteristic（GATT 特征值）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serviceUuid | string | 所属服务 UUID（128 位标准 UUID 字符串） |
+| characteristicUuid | string | 特征值 UUID（128 位标准 UUID 字符串，如 `00002a11-0000-1000-8000-00805f9b34fb`） |
+| characteristicValue | object(ArrayBuffer) | 特征对应的二进制值，ArrayBuffer |
+| descriptors | BLEDescriptor[] | 特定特征的描述符列表 |
+| properties | GattProperties | 特征值属性位（特定特征的属性描述） |
+
+### GattService（GATT 服务）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serviceUuid | string | 特定服务（service）的 UUID（128 位标准 UUID 字符串，如 `00001888-0000-1000-8000-00805f9b34fb`） |
+| isPrimary | boolean | 是否为主服务：主服务为 `true`，否则为 `false` |
+| characteristics | BLECharacteristic[] | 当前服务包含的特征值列表 |
+| includeServices | GattService[] | 当前服务依赖/包含的其它服务；Native 仅填充其 `serviceUuid` 字段，且只嵌套一层 |
+
+### ReadCharacteristicValue / WriteCharacteristicValue（参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 目标特征值；读操作使用 `serviceUuid` + `characteristicUuid`，写操作还需 `characteristicValue`（及 `descriptors` 数组） |
+
+### ReadDescriptorValue / WriteDescriptorValue（参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| descriptor | BLEDescriptor | 目标描述符；使用 `serviceUuid` + `characteristicUuid` + `descriptorUuid`，写操作还需 `descriptorValue` |
+
+### SetBLEMtuSize（参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| mtu | number(int) | 期望协商的 MTU 值（官方文档给出范围 22 ~ 512） |
+
+### SetNotifyCharChangedParams（参数）
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| characteristic | BLECharacteristic | 目标特征值（使用 `serviceUuid` + `characteristicUuid`） |
+| enable | boolean | `true` 开启 notify/indicate，`false` 关闭 |
+
+## 错误码
+
+Promise reject 的 `code` 为 Feature 框架错误码（`FeatureErrorCode`，`frameworks/runtimes/feature/include/feature_types.h`）与蓝牙自定义错误码（`feature/feature_async/include/feature_bluetooth.h`），由 Native 的 `bt_status_to_feature_error` 从蓝牙状态码转换。官方《蓝牙 bluetooth》文档给出的状态码描述与实证一致，合并如下：
+
+| code | 错误码名 | 触发场景 |
+| ---- | ---- | ---- |
+| 200 | `FT_ERR_GENERAL` | 通用失败：未连接即调用 GATT 操作、内存不足、底层返回失败等 |
+| 202 | `FT_ERR_ARGS` | 参数非法：UUID 格式错误、txPower/interval 越界、必填参数缺失、二进制数据为空等 |
+| 203 | `FT_ERR_NOT_SUPPORTED` | 该功能不支持（底层返回 NOT_SUPPORTED） |
+| 205 | `FT_ERR_DUPLICATE_SUBMISSION` | 重复提交：广播/扫描/连接已在进行中再次调用（如 gattClient 连接成功后再次连接） |
+| 10001 | `FEATURE_BT_NOT_ENABLED` | 当前系统蓝牙未打开（蓝牙未使能/服务未就绪） |
+| 10008 | `FEATURE_BT_UNKNOWN_ERROR` | 蓝牙未知错误 |
+| 10012 | `FEATURE_BT_IPC_ERROR` | 连接错误（与蓝牙服务的 IPC 通信错误） |
+| 10013 | `FEATURE_BT_NO_RESOURCES` | 无内存或连接资源（蓝牙服务资源不足） |
+| 10014 | `FEATURE_BT_NOT_FOUND` | 没有找到指定蓝牙设备（设备/对象未找到） |
+
+> reject 的 `data` 为各方法对应的错误信息字符串（见各方法小节，如 `"start scan failed!"`、`"gattc connect failed!"` 等）；`.catch(err => ...)` 中错误码可从异常对象获取（框架约定）。
+
+## 注意事项
+
+- **构建依赖**：本模块仅在 `CONFIG_BLUETOOTH_FEATURE_ASYNC` 构建中可用；广播/扫描/GATT 三个子能力还分别受 `CONFIG_BLUETOOTH_BLE_ADV`、`CONFIG_BLUETOOTH_BLE_SCAN`、`CONFIG_BLUETOOTH_GATT` 裁剪。未编译对应能力时，工厂方法返回空（null），Promise 方法的 Native 兜底分支会以 `"xxx is not supported"` 类信息 reject。
+- **系统属性开关**：KVDB 属性 `persist.using_bluetooth_feature`（默认 true）为 false 时不初始化蓝牙异步实例，所有调用均无法工作。
+- **后台运行限制**：官方标准文档明确标注本能力**禁止后台运行**，应用退到后台后不应继续依赖广播/扫描/连接。
+- **机型支持（官方支持明细）**：官方文档列出的机型中，仅 **Xiaomi Watch S5 支持**；小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9 / 9 Pro、Xiaomi Watch S3、Redmi Watch 4、小米腕部心电血压记录仪、小米手环 10、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6 均标注不支持。
+- **广播器机型可用性（社区补充（洛汐文档库））**：社区实测资料中，广播能力在 Xiaomi Smart Band 10 Pro 上不可用（❌），在 Xiaomi Watch S4 41mm 上为部分可用（△）；Scanner / GATT Client 的机型可用性以官方支持明细为准。
+- **UUID 格式差异**：**广播/扫描响应数据**中的 `serviceUuids`、`manufactureId`、`serviceUuid` 只接受 16 位 UUID 展开格式（`"0000XXXX-0000-1000-8000-00805F9B34FB"`，大小写不敏感）；**GATT 操作**中的服务/特征值/描述符 UUID 必须是 128 位标准格式（36 字符、`-` 分隔在第 8/13/18/23 位），否则返回参数错误（202）。
+- **二进制数据**：JIDL 中 `object` 类型的数据字段（`manufactureValue`、`serviceValue`、`characteristicValue`、`descriptorValue`、扫描结果 `data`）在 JS 侧为 ArrayBuffer；厂商/服务数据长度须大于 0，否则按参数错误处理。
+- **广播数据细节**：Native 会自动为广播数据添加 flags 字段（双模 + 可发现）；扫描响应（`advResponse`）不添加 flags，且 Native 只处理其中的 `manufactureData` 与 `serviceData`（`serviceUuids` 不写入扫描响应）。
+- **广播生命周期（社区补充（洛汐文档库））**：页面隐藏、应用退出或广播用途结束（如登录二维码失效）时必须主动 `stopAdvertising`，并在不再使用时 `close`；不要依赖垃圾回收释放蓝牙资源。
+- **扫描过滤**：`StartScanParams.filters` 与 `ScanOptions.interval` 字段在 JIDL 中声明但当前 Native 实现未使用——扫描不过滤任何设备，扫描间隔采用底层默认；`options.dutyMode` 生效（默认低功耗、被动扫描、1M PHY）。
+- **扫描结果回调**：每次发现设备，`subscribeBLEDeviceFind` 的 callback 收到的是**长度为 1 的 ScanResult 数组**；订阅 ID 从 1 开始，异常时返回 -1；`fail` 回调仅在未传 callback 时立即触发一次。`close` 会自动停止扫描并清除全部订阅。
+- **GATT 状态机**：`getServices` / 读写 / `setBLEMtuSize` / `setNotifyCharacteristicChanged` 必须在已连接（state=2）后调用，否则 reject（200）；`connect` 在非断开状态调用会 reject（205）；`disconnect` 在已断开状态直接 resolve，在连接中/断开中状态调用会 reject。
+- **MTU 协商**：`setBLEMtuSize` 必须在连接成功后调用；官方文档给出 `mtu` 取值范围 22 ~ 512。
+- **writeCharacteristicValue 入参**：Native 会直接遍历 `characteristic.descriptors` 字段，调用时该字段需传入数组（无描述符时传空数组 `[]`）；如需随写携带描述符，每个描述符需包含 `descriptorUuid` 与 `descriptorValue`。
+- **getServices 返回结构**：`includeServices`（包含服务）仅填充 `serviceUuid`，其余字段为空，且嵌套只处理一层；特征值的 `properties` 由底层 GATT 属性位转换得到。
+- **实例释放**：Advertiser / Scanner / GattClient 均为 Native 持有的接口对象，不再使用时应调用各自的 `close`（GattClient 的 close 返回 boolean），Native 在对象回收（finalize）时也会自动停止广播/扫描、断开并删除 GATT 客户端。
+- **事件注册**：`onBLEConnectionStateChange` 与 `onBLECharacteristicChange` 通过在 GattClient 实例上赋值函数注册；未注册时 Native 不会派发事件。接收特征值通知前必须先 `setNotifyCharacteristicChanged({ enable: true })`。
+- **官方文档中未收录于开源 JIDL 的方法**：官方《蓝牙 bluetooth》文档还描述了 `getDeviceName(OBJECT)`（success 回调返回 `deviceName`，获取对端 server 设备名）与 `getRssiValue(OBJECT)`（success 回调返回 `rssi`，单位 dBm，需连接成功后使用）两个 GattClientDevice 方法；openvela 开源 JIDL（`bluetooth_ble.jidl` v2.0）中未定义这两个接口，本文不列入 API 清单，使用前请以目标固件实际接口为准。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 不支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

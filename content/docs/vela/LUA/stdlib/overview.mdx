@@ -1,0 +1,98 @@
+---
+title: Lua 标准库
+description: Lua 5.4 标准库离线文档与 Vela 表盘宿主环境差异
+---
+
+本栏目把 Lua 标准库整理为**站内离线文档**，便于在打包后的 App 中直接查阅。
+由于不同固件/运行时裁剪差异，**并非所有标准库/函数都一定存在**；请以实机验证为准。
+
+## 可用性标注
+
+各页面的函数速查表会给出“可用性”标注（经验判断）：
+
+| 标注 | 含义 |
+|---|---|
+| `常见可用` | 多数 Lua 运行时通常具备 |
+| `可能不可用（…）` | 受固件裁剪、权限、文件系统、Lua 版本/构建选项等影响 |
+
+<Callout type="warn">
+建议在调用前用 `type(xxx.fn) == "function"` 做保护判断。
+</Callout>
+
+## 离线索引
+
+- [全局环境（_G）](/docs/vela/LUA/stdlib/stdlib/globals)
+- [coroutine（协程）](/docs/vela/LUA/stdlib/stdlib/coroutine)
+- [debug（调试库）](/docs/vela/LUA/stdlib/stdlib/debug)
+- [io（输入输出）](/docs/vela/LUA/stdlib/stdlib/io)
+- [math（数学库）](/docs/vela/LUA/stdlib/stdlib/math)
+- [os（系统库）](/docs/vela/LUA/stdlib/stdlib/os)
+- [package（模块加载）](/docs/vela/LUA/stdlib/stdlib/package)
+- [string（字符串库）](/docs/vela/LUA/stdlib/stdlib/string)
+- [table（表库）](/docs/vela/LUA/stdlib/stdlib/table)
+
+<Callout type="info">
+洛汐文档库记录的 Vela 表盘宿主还提供标准 **`utf8`** 库（`char`、`charpattern`、`codes`、`codepoint`、`len`、`offset`）；本栏目暂无独立页面，语义以 Lua 5.4 官方手册为准。
+</Callout>
+
+## 如何判断“你的设备是否支持”
+
+建议在**按钮事件**或**定时器回调**里运行以下探测代码（避免初始化阶段直接跑导致不稳定）：
+
+```lua
+local function has(name)
+  local ok = type(_G[name]) ~= "nil"
+  print(name, ok and "OK" or "MISSING", type(_G[name]))
+end
+
+for _, n in ipairs({ "coroutine", "debug", "io", "math", "os", "package", "string", "table" }) do
+  has(n)
+end
+```
+
+如果某个库存在但函数缺失，优先用 `type(xxx.fn) == "function"` 做保护判断，再决定是否启用相关能力。
+
+## Vela 表盘宿主环境差异（洛汐文档库）
+
+以下内容整理自洛汐文档库《Lua 5.4 标准库》，对应 **Xiaomi Vela 穿戴设备的 Lua 表盘宿主**：宿主提供的脚本级接口，参数与返回语义遵循 **Lua 5.4.0**；洛汐文档给出了宿主注册的完整成员索引。各库页面的“社区补充（洛汐文档库）”小节有分库细节。
+
+### 宿主标准库支持一览
+
+| 库 | 宿主支持情况 | 关键差异 / 备注 |
+|---|---|---|
+| 基础库（`_G`） | 完整注册：23 个全局函数 + `_G`、`_VERSION` | 含 `rawlen`、`warn`、`collectgarbage`、`load`、`loadfile`、`dofile` |
+| `coroutine` | 8 个成员全部注册 | `close`、`create`、`isyieldable`、`resume`、`running`、`status`、`wrap`、`yield` |
+| `package` | 全局 `require` + 8 个 `package` 成员 | `loadlib` 虽注册但**动态库加载已关闭**；厂商模块由宿主静态放入 `package.preload` |
+| `string` | 17 个函数全部注册 | 含 `dump` 以及 `pack`/`unpack`/`packsize` 二进制打包系列 |
+| `utf8` | 已注册（本栏目无独立页面） | `char`、`charpattern`、`codes`、`codepoint`、`len`、`offset` |
+| `table` | 7 个函数全部注册 | 含 `pack`、`unpack`、`move` |
+| `math` | 27 个成员注册 | 可能为 **32 位整数/浮点**配置；索引中未见 `sinh/cosh/tanh`、`frexp/ldexp` |
+| `io` | 11 个模块函数 + 文件对象方法 | **`io.popen` 不受支持**；路径受进程权限与系统分区只读属性限制 |
+| `os` | 11 个函数注册 | `os.execute` 能否启动任意命令由 Lua 宿主和系统 shell 配置决定 |
+| `debug` | 17 个成员注册（含 `setcstacklimit`） | 可越过普通封装边界；不可信脚本不应放入共享 Lua state |
+
+### 关键环境差异要点
+
+1. **动态库加载关闭**：`package.loadlib` 虽然被注册，但固件关闭了动态库加载，调用会返回 `"dynamic libraries not enabled"`，不能用它加载 `.so`；厂商模块由宿主静态放入 `package.preload`。详见 [package 篇](/docs/vela/LUA/stdlib/stdlib/package)。
+2. **`io.popen` 不受支持**：无法管道启动外部进程；文件路径仍受当前进程权限和系统分区只读属性限制。详见 [io 篇](/docs/vela/LUA/stdlib/stdlib/io)。
+3. **`os.execute` 权限不确定**：是否允许启动任意命令由 Lua 宿主和系统 shell 配置决定，不要据函数名推断第三方脚本一定有该权限。详见 [os 篇](/docs/vela/LUA/stdlib/stdlib/os)。
+4. **数值 ABI 可能是 32 位**：嵌入式产品可能以 32 位整数/浮点配置编译。脚本启动时应用 `math.maxinteger`、`math.type(1)` 和 `string.packsize('j')` 读取实际 ABI，不要假定桌面 Lua 的 64 位配置。详见 [math 篇](/docs/vela/LUA/stdlib/stdlib/math)。
+5. **debug 库的安全边界**：debug 库可越过普通封装边界（读写局部变量、上值、注册表等），系统应用不应把不可信脚本放进共享 Lua state。详见 [debug 篇](/docs/vela/LUA/stdlib/stdlib/debug)。
+
+### 机型可用性
+
+洛汐文档库标注以下机型标准库可用：
+
+| Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|---|---|
+| ✅ | ✅ |
+
+### 延伸参考
+
+- [Lua 5.4 参考手册：标准库](https://www.lua.org/manual/5.4/manual.html#6)
+- [Lua 5.4 C API](https://www.lua.org/manual/5.4/manual.html#4)
+
+## 参考来源：官方 docs-lua / 洛汐文档库
+
+- 官方 Lua 5.4 参考手册·标准库：[lua.org/manual/5.4/manual.html#6](https://www.lua.org/manual/5.4/manual.html#6)
+- 洛汐文档库《Lua 5.4 标准库》：[docs.luoxe.cn/docs/vela/lua/standard-library](https://docs.luoxe.cn/docs/vela/lua/standard-library/)

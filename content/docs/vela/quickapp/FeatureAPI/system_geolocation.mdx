@@ -1,0 +1,277 @@
+---
+title: "system.geolocation 地理位置"
+---
+
+> 获取设备当前地理位置（经纬度、海拔、速度、精度），支持单次获取与持续订阅定位更新。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.geolocation` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | `hapjs.permission.LOCATION`（getLocation / subscribe / unsubscribe 三个方法均需要，官方文档对应"精确设备定位"权限） |
+
+## 接口声明与权限
+
+`manifest.json` 中声明 Feature：
+
+```json
+{ "name": "system.geolocation" }
+```
+
+三个接口均要求**精确设备定位**权限，需在 `manifest.json` 中配置：
+
+```json
+{
+  "permissions": [
+    { "name": "hapjs.permission.LOCATION" }
+  ]
+}
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import geolocation from '@system.geolocation'
+// require 写法（官方文档写作 require('@system.geolocation')，本仓库运行时/测试中使用 require('system.geolocation')）
+const geolocation = require('system.geolocation')
+```
+
+## 功能概述
+
+`system.geolocation` 提供 GNSS 卫星定位能力：Native 实现通过 NuttX uORB 消息机制订阅 `sensor_gnss` 主题（即 GNSS/GPS 传感器驱动上报的定位数据，定位方式为卫星定位，实现中不涉及网络定位），将经纬度、海拔、地速、精度等信息返回给 JS。支持两种使用方式：`getLocation` 一次性获取当前位置（Promise），`subscribe` 持续接收定位更新（回调），`unsubscribe` 取消持续监听。定位回调频率由 GNSS 传感器上报频率决定，JS 层不提供频率/间隔配置。
+
+官方文档对 `subscribe` 的说明为"监听地理位置，如果多次调用，仅最后一次调用生效"，与实证行为一致（重复订阅替换旧回调）。
+
+## API
+
+### geolocation.getLocation(param)
+
+获取一次当前地理位置（官方文档语义："获取地理位置"）。异步模型：**Promise 风格**（JIDL 定义为 `promise<getLocationRet> getLocation(getParam param)`）。
+
+> 官方标准文档描述：`getLocation(OBJECT)` 采用 `success`（必填）/`fail`/`complete` 回调风格，`fail` 可能因为缺乏权限触发。
+
+**参数（param 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| timeout | number | 否 | `30000` | 设置超时时间，单位毫秒（ms）；超时未收到有效定位则 Promise reject |
+
+**Promise resolve 值（getLocationRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| longitude | number | 经度（double），浮点数，保留 5 位小数 |
+| latitude | number | 纬度（double），浮点数，保留 5 位小数 |
+| altitude | number | 海拔高度，单位米（double），浮点数，保留 5 位小数 |
+| speed | number | 地面速度，单位米/秒（double），浮点数，保留 5 位小数 |
+| accuracy | number | 水平精度/精确度，单位米，值为正整数（int，取自 GNSS 水平精度因子 eph） |
+| accuracyInfo | object | 精确度信息对象：`{ horizontal: number, vertical: number }`，包含水平和垂直方向精准度；`horizontal` 为水平精度（eph）、`vertical` 为垂直精度（epv），均为 double，保留 5 位小数 |
+
+**Promise reject**
+
+- 参数：`(data: string, code: number)`。
+- 错误码/错误信息（从 Native 实现提取）：
+
+| code | 错误码名 | 触发场景与 message |
+| ---- | ---- | ---- |
+| 200 | GENERAL | 排队中的 getLocation 请求超过 100 个：`"Reject: too many requests"`；订阅 GNSS 主题失败（如设备无 GNSS 硬件/驱动）：`"subscribe error"` |
+| 204 | TIMEOUT | 超时未收到有效定位：`"getLocation time out"` |
+
+> 官方标准文档描述：`fail` 错误码为 `203`（该功能不支持）与 `204`（超时返回）。
+
+**示例（实证，Promise 风格）**
+
+```js
+const geolocation = require('system.geolocation')
+
+// Promise 风格
+geolocation.getLocation({
+  timeout: 15000
+}).then(function (ret) {
+  console.log('经度：', ret.longitude)
+  console.log('纬度：', ret.latitude)
+  console.log('海拔（米）：', ret.altitude)
+  console.log('速度（米/秒）：', ret.speed)
+  console.log('水平精度（米）：', ret.accuracy)
+  console.log('精度详情：', ret.accuracyInfo.horizontal, ret.accuracyInfo.vertical)
+}).catch(function (err) {
+  console.log('定位失败：', err)
+})
+```
+
+**官方示例（success/fail 回调风格，供对照）**
+
+```javascript
+geolocation.getLocation({
+  success: function(data) {
+    console.log(
+      `handling success: longitude = ${data.longitude}, latitude = ${
+        data.latitude
+      }, speed = ${data.speed}, altitude = ${data.altitude}`
+    )
+  },
+  fail: function(data, code) {
+    console.log(`handling fail, code = ${code}, errorMsg=${data}`)
+  }
+})
+```
+
+### geolocation.subscribe(param)
+
+持续监听地理位置：每次位置信息发生变化（收到有效 GNSS 定位数据）都会回调 `callback`。多次调用仅最后一次生效。异步模型：**回调风格**（JIDL 定义为 `void subscribe(subscribeParam param)`，无返回值、不支持 Promise）。
+
+**参数（param 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| callback | function | 是 | — | 定位更新回调，每次位置信息变化都会被回调，参数为 `getLocationRet`（字段同 getLocation 的 resolve 值） |
+| fail | function | 否 | `null` | 失败回调，签名为 `(data: string, code: number)` |
+
+**成功回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| ret | object | `getLocationRet`，结构同上文 getLocation 的 resolve 值（longitude/latitude/altitude/speed/accuracy/accuracyInfo） |
+
+> 官方标准文档描述：`subscribe` 的 callback 返回值仅列出 longitude/latitude/altitude/speed/accuracy（无 `accuracyInfo`）。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`。
+
+| code | 错误码名 | 触发场景与 message |
+| ---- | ---- | ---- |
+| 200 | GENERAL | 回调 ID 非法：`"invalid callback id"`；订阅 GNSS 主题失败：`"subsrcibe error"`（message 拼写以 Native 实现为准） |
+
+> 官方标准文档描述：`subscribe` 的 `fail` 错误码为 `203`（该功能不支持）。
+
+**示例（实证）**
+
+```js
+const geolocation = require('system.geolocation')
+
+geolocation.subscribe({
+  callback: function (ret) {
+    console.log('位置更新：', ret.longitude, ret.latitude)
+    console.log('速度：', ret.speed, '米/秒')
+  },
+  fail: function (data, code) {
+    console.log('订阅失败：', code, data)
+  }
+})
+
+// 同一实例再次调用 subscribe 会替换上一次的回调，无需先 unsubscribe
+geolocation.subscribe({
+  callback: function (ret) {
+    console.log('新回调：', ret.latitude, ret.longitude)
+  }
+})
+```
+
+**官方示例（回调风格，供对照）**
+
+```javascript
+geolocation.subscribe({
+  callback: function(data) {
+    console.log(
+      `handling success: longitude = ${data.longitude}, latitude = ${
+        data.latitude
+      }, speed = ${data.speed}, altitude = ${data.altitude}`
+    )
+  },
+  fail: function(data, code) {
+    console.log(`handling fail, code = ${code}, errorMsg=${data}`)
+  }
+})
+```
+
+### geolocation.unsubscribe
+
+取消监听地理位置（取消本实例的持续定位订阅）。异步模型：同步调用、无返回值（JIDL 定义为 `void unsubscribe`），无参数、无回调、不支持 Promise。未订阅时调用为空操作。
+
+**参数**
+
+无。
+
+**返回值**
+
+无。
+
+**示例**
+
+```js
+const geolocation = require('system.geolocation')
+
+// 取消持续监听；未订阅时调用为空操作
+geolocation.unsubscribe
+```
+
+## 数据结构
+
+### getLocationRet
+
+定位结果对象，`getLocation` 的 resolve 值与 `subscribe` 的 callback 参数共用该结构。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| longitude | double（JS：number） | 经度，浮点数，保留 5 位小数 |
+| latitude | double（JS：number） | 纬度，浮点数，保留 5 位小数 |
+| altitude | double（JS：number） | 海拔高度（米），浮点数，保留 5 位小数 |
+| speed | double（JS：number） | 地面速度（米/秒），浮点数，保留 5 位小数 |
+| accuracy | int（JS：number） | 水平精度/精确度（米），值为正整数，取自 GNSS eph |
+| accuracyInfo | object | `{ horizontal: number, vertical: number }`，分别为水平精度（eph）与垂直精度（epv），保留 5 位小数 |
+
+### getParam
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| timeout | int（JS：number） | 超时时间，毫秒，默认 30000 |
+
+### subscribeParam
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| callback | function | 定位更新回调，参数为 `getLocationRet`，必填 |
+| fail | function | 失败回调 `(data: string, code: number)`，默认为 `null`（可不传） |
+
+## 机型支持明细
+
+官方文档给出的设备支持情况：
+
+| 设备产品 | 说明 |
+| ---- | ---- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持(实际不支持) |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **权限**：三个方法均标注 `[permissions="hapjs.permission.LOCATION"]`（官方文档对应"精确设备定位"），使用前必须在 manifest 声明定位权限；官方文档指出缺乏权限时 `fail` 会被触发。
+- **定位方式**：当前实现仅使用 GNSS 卫星定位（订阅 NuttX `sensor_gnss` uORB 主题），不提供网络/基站定位；设备需具备 GNSS 硬件并启用相应传感器驱动，否则订阅失败返回 code 200（`"subscribe error"` / `"subsrcibe error"`）。
+- **数据有效性**：经纬度或海拔为 NaN 的定位数据会被丢弃，不触发回调、不完成 getLocation。
+- **回调频率**：`subscribe` 的回调频率等于 GNSS 传感器的上报频率，JS 层无间隔/频率配置项。
+- **重复订阅**：同一 Feature 实例重复调用 `subscribe` 不会创建多个监听，而是替换旧的 callback/fail（旧回调被移除），与官方"多次调用仅最后一次生效"一致。
+- **资源释放**：当没有任何待处理的 `getLocation` 请求且没有 `subscribe` 订阅者时，底层 GNSS 主题会自动退订并关闭；页面 detach 时也会自动清理该实例的 pending 请求与订阅。
+- **超时机制**：Native 内部每秒检查一次 `getLocation` 等待队列，超过 `timeout`（默认 30000ms）未拿到有效定位即 reject（code 204，官方文档同样定义 204 为超时返回）。
+- **请求上限**：排队中的 `getLocation` 请求超过 100 个时，新请求直接 reject（code 200，`"Reject: too many requests"`）。
+- **数值精度**：经纬度、海拔、速度、精度因子均四舍五入保留 5 位小数；官方文档中 accuracy 描述为正整数。
+- **错误码差异**：官方文档定义 203 表示"该功能不支持"，openvela 实证实现中功能不支持/订阅失败统一走 code 200，移植或调试时应以实际回调 code 为准。
+
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

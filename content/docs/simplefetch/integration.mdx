@@ -160,6 +160,30 @@ export async function getDeviceInfo() {
 此处对 ResonaUI 的实现做了简写。理论上，`getDeviceInfo` 只要能正确给 `global.NetworkStatus` 与 `global.fetchAva` 赋值即可。
 </Callout>
 <details>
+#### `uploadFile` —— 文件保存
+<Callout type='info'>
+自SimpleFetch1.2后(JS版本),SimpleFetch集成了文件下载功能,您可以参考以下代码为您的项目集成文件下载功能或直接将其删除
+</Callout>
+```javascript
+export async function uploadFile(data){
+  if (!data?.uri) throw new Error('缺少 uri')
+  if (!data?.data) throw new Error('缺少 data')
+  const bytes = decodeBase64(data.data)
+  await ensureDir(data.uri)
+  await new Promise((resolve, reject) => {
+    file.writeArrayBuffer({
+      uri: data.uri,
+      buffer: bytes,
+      append: data.append,
+      position: data.position,
+      success: resolve,
+      fail: (d, code) => reject(`写入失败: ${code}`)
+    })
+  })
+}
+```
+十分感谢`雪松`大佬对于文件下载部分的指导
+
 <summary>进阶移植：关于`global.uiAdm.MessageBox</summary>
 
 代码里出现的 `global.uiAdm.MessageBox` 只是对 `prompt.showToast` 的简单封装，具体实现如下，按需替换成你自己的提示组件即可：
@@ -208,7 +232,7 @@ export async function sendFetch(url) {
   }
 }
 ```
-
+发起下载同理，此处略  
 <Callout>
 设计上，SimpleFetch 的 `fetch` 函数返回值与 `@system.fetch` **完全一致**，因此可以直接替换系统 fetch 使用。
 </Callout>
@@ -335,7 +359,7 @@ export async function sendFetch(url) {
   }
 }
 ```
-
+发起下载同理，此处略  
 <Callout>
 设计上，SimpleFetch 的 `fetch` 函数返回值与 `@system.fetch` **完全一致**，因此可以直接替换系统 fetch 使用。
 </Callout>

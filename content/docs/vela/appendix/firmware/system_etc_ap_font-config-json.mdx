@@ -1,0 +1,66 @@
+---
+title: "AP font_config.json"
+---
+
+## 文件信息
+
+| 项目 | 值 |
+|---|---|
+| 大小 | 18887 字节 |
+| SHA-256 | `4179aae0a85c134e66f7b099669f15204f01813a7a754d03d88a83ca1166354e` |
+| 顶层字段 | `emoji-list`、`font-family` |
+
+该文件是 AP 字体回退和图片 Emoji 路由表。它不会把字体嵌入系统，而是告诉字体管理器：主字体缺少字形时按什么顺序回退，以及特定 Unicode 应从哪个资源目录加载图片。
+
+## emoji-list
+
+共 7 条规则：
+
+| 字体名 | 资源目录 | 格式 | 匹配字号 | Unicode 范围数 |
+|---|---|---|---|---|
+| `Emoji_Local` | `/resource/system/whatsapp/` | `.bin` | 24–40 | 186 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji24/` | `.png` | 24–29 | 2 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji30/` | `.png` | 30–31 | 2 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji32/` | `.png` | 32–33 | 2 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji34/` | `.png` | 34–37 | 2 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji38/` | `.png` | 38–41 | 2 |
+| `Emoji_WeChat` | `/resource/system/wechat/emoji42/` | `.png` | 42–60 | 2 |
+
+`unicode-range` 使用十进制码点的闭区间 `begin/end`。渲染器先按码点判断规则，再根据 `match-size` 选择最接近当前字号的资源目录。
+
+示例结构：
+
+```json
+{
+  "font-name": "Emoji_WeChat",
+  "path": "/resource/system/wechat/emoji32/",
+  "ext": ".png",
+  "match-size": { "min": 32, "max": 33 },
+  "unicode-range": [
+    { "begin": 57345, "end": 57379 }
+  ]
+}
+```
+
+## font-family
+
+共定义 8 条 MiSans 回退链：
+
+| 主字体 | 回退顺序 |
+|---|---|
+| `MiSans-Demibold` | Demibold-All → Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Demibold-All` | Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Semibold` | Demibold-All → Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Semibold-All` | Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Medium` | Medium-All → Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Medium-All` | Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Regular` | Regular-All → Emoji_Local → Emoji_WeChat |
+| `MiSans-Regular-All` | Emoji_Local → Emoji_WeChat |
+
+带 `-All` 的字体承担更完整字符集回退；Emoji 位于链尾，避免普通字符被图片资源抢占。
+
+## 修改与扩展
+
+可以通过新增 Unicode 区间或回退字体支持额外字符，但必须同时把对应字体/图片放入 `/resource`，并确保字体管理器认识该名称。区间重叠时的优先级取决于数组顺序，错误配置可能导致普通符号被替换成微信或 WhatsApp 图片。
+
+这是 AP ROMFS 文件；只改 `/resource` 而不改路由表，或只改路由表而不提供资源，都不会得到完整效果。

@@ -1,0 +1,24 @@
+---
+title: "OTA key.avb"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 520 字节  
+SHA-256 |  `da7ef021ca05ef66f940a98aa795c9aba83bb1e399073a7a2762c332c9ca38fe`  
+用途 |  `zip_verify ota.zip /etc/key.avb`  
+  
+这是 RSA-2048 AVB 公钥 blob，与 BL2 `/etc/key.avb` 完全相同。OTA `rcS` 在挂载 ZIP 和运行包内 `ota.sh` 前，用它验证 `/data/ota.zip`。
+
+## 验证层次
+  1. BL2 使用同一公钥验证 ZIP 内的 `vela_ota.bin`；
+  2. 启动 OTA 环境后，OTA 再验证整个 `ota.zip`；
+  3. 验证通过才挂载 `/ota` 并执行刷写脚本。
+
+这避免攻击者只替换 OTA ZIP 中的 AP/Resource/BL2 文件，同时保留一个合法 OTA 启动镜像。
+
+## 格式
+二进制由大端 `2048` 位数值、`n0inv=0x63f48b51`、256 字节模数和 256 字节 Montgomery `rr` 组成。它不包含签名私钥。
+
+替换它需要同时处理 BL2 信任根和所有待验证产物；单独替换会切断官方升级链。

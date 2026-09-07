@@ -1,0 +1,46 @@
+---
+title: "BL2 key.avb"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 520 字节  
+SHA-256 |  `da7ef021ca05ef66f940a98aa795c9aba83bb1e399073a7a2762c332c9ca38fe`  
+用途 | 验证 `/ota/vela_ota.bin`  
+  
+这是 AVB 格式的 RSA 公钥数据，不是私钥，也不是证书。BL2 `rcS` 在从 OTA ZIP 启动更新环境前执行：
+```text
+
+
+
+
+avb_verify
+ /ota/vela_ota.bin
+ /etc/key.avb
+
+
+
+```
+
+验证失败会清理 OTA 状态、删除 `/data/ota.zip` 并重启。
+
+## 二进制结构
+520 字节符合 AVB RSA-2048 公钥结构：
+
+区域 | 长度 | 含义  
+---|---|---  
+`key_num_bits` | 4 | 大端值 `2048`  
+`n0inv` | 4 | Montgomery 运算参数，样本值 `0x63f48b51`  
+`modulus` | 256 | RSA 模数  
+`rr` | 256 | `R² mod n` 预计算值  
+  
+AVB blob 通常不单独保存私钥或完整 X.509 元数据；签名端持有对应私钥，设备只保存验证所需的公钥参数。
+
+## 与 OTA key.avb 的关系
+BL2 和 OTA 环境里的 `key.avb` 字节完全相同。BL2 用它验证 OTA 启动镜像，OTA 环境用同一公钥验证整个 `ota.zip`，形成同一信任根下的两阶段检查。
+
+## 修改影响
+替换公钥只有在所有验证阶段都同步使用新密钥、相关镜像和 ZIP 都用对应私钥重新签名时才有意义。只改 BL2 key 会让官方 OTA 镜像无法通过；只改 OTA key 则可能根本无法先通过 BL2 对 `vela_ota.bin` 的验证。
+
+即使能重打 BL2 ROMFS，BL2 自身还可能受更早启动级验证。没有硬件恢复手段时不要修改。

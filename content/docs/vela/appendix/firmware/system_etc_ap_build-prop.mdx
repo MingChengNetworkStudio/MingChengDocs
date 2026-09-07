@@ -1,0 +1,45 @@
+---
+title: "AP build.prop"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 221 字节  
+SHA-256 |  `3eef024dac2f19bc73db5374c01e3b30c6e4c43070834b12b3203f9afe1810f0`  
+使用阶段 | 正常 AP 系统  
+  
+这是正常系统的只读构建属性。系统属性服务可把这些键暴露给 `getprop`、设备信息接口、UI 布局和兼容性判断。
+
+## 属性解释
+属性 | 样本值 | 含义  
+---|---|---  
+`ro.build.version` |  `3.101.036` | 面向系统组件比较的固件版本  
+`ro.build.customer_version` |  `CONBINE_LTALM078_T3.101.036_06242053` | 厂商构建/交付版本，尾段看起来包含构建批次或时间标识  
+`ro.product.device.screenshape` |  `rect` | 屏幕形状为矩形，影响布局和资源选择  
+`ro.product.device.devicetype` |  `band` | 产品类型为手环  
+`ro.sf.lcd_density` |  `336` | 逻辑屏幕密度，影响 dp/px 换算和资源匹配  
+`ro.build.id` |  `CONBINE_LTALM078_T3.101.036` | 构建标识，不含 customer version 的批次后缀  
+  
+`ro.*` 通常是启动后只读属性。直接执行 `setprop ro.build.version ...` 很可能失败或只产生短暂覆盖；永久改变需要修改 ROMFS 并重刷 AP。
+
+## 与其他镜像的差异
+AP 与 Factory 的该文件完全相同。BL2/OTA 版本没有 `ro.sf.lcd_density`，且 `customer_version` 被缩短；这是因为引导和升级环境不需要完整 UI/产品属性。
+
+## o63 机型值
+属性 | Xiaomi Watch S4 41mm o63  
+---|---  
+`ro.build.version` |  `3.100.028`  
+`ro.ota.version` |  `1`  
+`ro.product.device.devicetype` |  `watch`  
+`ro.product.device.screenshape` |  `circle`  
+`ro.sf.lcd_density` |  `352`  
+`ro.build.id` |  `3.100.028`  
+  
+o63 文件为 160 字节，SHA-256 为 `6c7f90c4c480b54a2d593227e5f017459e8da514024f686f164eb4fbc4a1886d`。它不含 p67tc 的 `ro.build.customer_version`。应用应读取属性而不是根据文档硬编码屏幕形状、设备类型或 density。
+
+## 修改影响
+  * 改版本号可能影响升级比较、日志标识和兼容性分支，但不会改变实际代码；
+  * 改 `devicetype` 或 `screenshape` 可能让 UI 选错布局；
+  * 改 density 会改变快应用和系统 UI 的缩放，可能造成触控坐标与显示不一致；
+  * 伪造 build id 不能绕过镜像签名或 API 白名单。

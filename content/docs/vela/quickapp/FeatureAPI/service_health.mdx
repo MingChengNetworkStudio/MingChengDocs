@@ -1,0 +1,330 @@
+---
+title: "service.health 健康服务"
+---
+
+> 订阅/获取健康传感器数据（当前开源实现支持心率），底层通过 uORB 消息主题接收心率算法服务上报的采样数据。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `service.health`（注意前缀是 `service`，不是 `system`） |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | （社区资料建议在 manifest 中同时声明 `hapjs.permission.HEALTH`，见下文 Manifest 配置） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import health from '@service.health'
+// 本仓库运行时/测试中使用的写法
+const health = require('service.health')
+```
+
+## Manifest 配置
+
+> **社区补充（洛汐文档库）**：社区/大赛文档要求 Feature 与健康权限**同时声明**——只声明 Feature 不声明权限会被健康数据权限管控拒绝；只声明权限则无法加载模块。若需要应用进入后台后仍持续收到订阅回调，还要把模块加入 `config.background.features`：
+
+```json
+{
+  "deviceTypeList": ["watch"],
+  "features": [
+    { "name": "service.health" }
+  ],
+  "permissions": [
+    { "name": "hapjs.permission.HEALTH" }
+  ],
+  "config": {
+    "background": {
+      "features": ["service.health"]
+    }
+  }
+}
+```
+
+> 说明：openvela 开源仓库的 `health.jidl` 上没有 `[permissions]` 注解，上述权限/后台配置来自社区大赛文档（`dev-ai-contest-2026` 分支第一方指南），在商业版/大赛固件上适用；开源固件上是否强制以设备实际管控策略为准。
+
+## 功能概述
+
+`service.health` 提供健康数据的访问能力：可通过 `subscribeSample` 持续订阅某类健康数据（如心率），传感器每上报一批采样数据就回调 JS；也可通过 `getRecentSamples`（Promise 风格）一次性获取下一批到达的采样数据；不再需要时调用 `unsubscribeSample` 取消订阅。
+
+底层基于 NuttX uORB 发布/订阅机制：Native 侧通过 `uv_topic_subscribe` 订阅心率算法主题 `ORB_ID(algo_heartrate)`（心率算法服务发布 `algo_heartrate` 消息，含 `bpm` 与 `timestamp_us` 字段），收到数据后组装成 JSON 对象回调 JS。主题订阅按引用计数共享：没有任何订阅者/待获取请求时自动关闭 uORB 订阅。
+
+> 平台依赖：该 Feature 依赖设备上运行心率算法服务并持续发布 `algo_heartrate` 主题；主题不存在（`orb_exists` 检查失败）时对应数据类型会被跳过。
+
+> **社区补充（洛汐文档库）**：小米/openvela 2026 大赛文档已公开"采样族"完整参数（`getRecentSamples`、`subscribeSample`、`unsubscribeSample`），大赛分支的数据类型范围是**心率、血氧和压力**；而较早的 dev 实现与出货固件可能只注册心率。固件中还存在两个未进入公开指南的便捷成员（`getHr`、`getTodayCalorie`，见下文）。采样数据结构在社区文档中统一描述为 `Sample { timeStamp: number /* 毫秒级 epoch 时间戳 */; value: number }`。大赛模拟器中三类数据均为 1 Hz；指南给出的真机压力数据约 60 秒一次——不要用模拟器频率推定其他出货固件的功耗或采样周期。
+
+## 常量
+
+### DATA_TYPES
+
+JIDL 中定义的 `const DATA_TYPES`，数据类型枚举。开源 dev 分支 `health.jidl` 当前只定义心率：
+
+| 常量 | 值 | 说明 |
+| ---- | -- | ---- |
+| `DATA_TYPES.HEART_RATE` | `0` | 心率数据（bpm，次/分钟） |
+
+> **社区补充（洛汐文档库）**：`dev-ai-contest-2026` 第一方指南的契约还包含以下数据类型，其 `value` 均为 Integer：
+
+| 常量 | 值 | `value` 类型/单位 |
+| ---- | -- | ---- |
+| `health.DATA_TYPES.HEART_RATE` | `0` | Integer，bpm |
+| `health.DATA_TYPES.SPO2` | `6` | Integer，百分比（血氧） |
+| `health.DATA_TYPES.STRESS` | `9` | Integer，压力值 |
+
+> 公开 dev 分支的 `health.jidl` 目前只定义 `HEART_RATE = 0`，C++ 实现也只映射 `algo_heartrate` 主题。因此**必须读取设备实际导出的 `health.DATA_TYPES`**，不能在旧系统上仅凭数值 6/9 假定血氧和压力已接入。
+
+## API
+
+### health.getRecentSamples(param)
+
+一次性获取指定类型的最近采样数据（实际行为为订阅对应 uORB 主题，**下一批**采样数据到达时 resolve）。异步模型为 **Promise 风格**：`promise<jsonobject[]>`。
+
+**参数（param 对象字段，JIDL struct `getRecentSamplesParam`）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| dataTypes | Array&lt;number&gt;（`int[]`） | 是 | - | 数据类型数组，元素取 `DATA_TYPES` 中的值；开源实现当前仅支持 `[0]`（心率），社区大赛固件支持心率/血氧/压力 |
+
+**Promise resolve 值**
+
+`Array<object>`：每个有效数据类型对应一个元素（社区文档中元素结构为 `RecentSample { dataType: number; data: Sample }`），心率数据结构为：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| dataType | number | 数据类型，`0` 表示心率 |
+| data | object | 采样数据对象 |
+| data.value | number | 心率值（bpm，次/分钟） |
+| data.timeStamp | number | 采样时间戳，单位**毫秒**（由 Native 侧 `timestamp_us / 1000` 换算） |
+
+**Promise reject**
+
+- 形式：`catch(err => ...)`，错误为 `(code: number, data: string)`（Native 侧 `FeaturePromiseReject(handle, pid, code, msg)`）。
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `dataTypes is empty` | `dataTypes` 为空数组 |
+| 202 | `FT_ERR_ARGS` | `no valid dataTypes to subscribe` | 数组中没有有效且当前可用（uORB 主题已发布）的数据类型 |
+| 200 | `FT_ERR_GENERAL` | `malloc getMeta failed` / `malloc event failed` / `malloc topic failed` / `subscribe error` | 内存分配失败或 uORB 订阅失败 |
+
+> 不识别的类型值、以及主题尚未发布（`orb_exists` 失败）的类型会被静默跳过；全部跳过时才以 202 reject。
+
+> **社区补充（洛汐文档库）**：社区大赛指南称同一方法同时支持 Promise 与 `success`/`fail`/`complete` options 回调，`dataTypes` 必须是非空数组；"只返回能够查询到的类型，不支持的类型会被跳过，不会令整个请求报错"。
+>
+> 社区资料（洛汐文档库）描述：没有缓存或请求类型均不可用时返回空数组并走 success 回调。
+
+**示例（实证，Promise 风格）**
+
+```js
+const health = require('service.health')
+
+health
+  .getRecentSamples({
+    dataTypes: [health.DATA_TYPES.HEART_RATE]
+  })
+  .then(function (samples) {
+    samples.forEach(function (item) {
+      console.log('dataType =', item.dataType)
+      console.log('value =', item.data.value, 'timeStamp =', item.data.timeStamp)
+    })
+  })
+  .catch(function (err) {
+    // err 为 reject 错误（code/message 以 Native 实现为准）
+    console.log('getRecentSamples failed', err)
+  })
+```
+
+> **社区补充（洛汐文档库）**：大赛固件上可一次请求多类数据（示例中的 `SPO2`/`STRESS` 需设备实际导出才可用）：
+
+```js
+health.getRecentSamples({
+  dataTypes: [
+    health.DATA_TYPES.HEART_RATE,
+    health.DATA_TYPES.SPO2,
+    health.DATA_TYPES.STRESS
+  ]
+}).then(items => {
+  for (const item of items) {
+    console.log(item.dataType, item.data.timeStamp, item.data.value)
+  }
+}).catch(error => console.error(error))
+```
+
+### health.subscribeSample(param)
+
+持续订阅某类健康数据，传感器上报采样数据时反复触发回调。异步模型为**回调风格**，无返回值（`void`）。该方法不返回订阅 ID，每种类型以 `dataType` 标识。
+
+**参数（param 对象字段，JIDL struct `subscribeParam`）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| dataType | number（int） | 是 | - | 数据类型，取 `DATA_TYPES` 中的值，开源实现当前仅支持 `0`（心率） |
+| callback | function（`sub_cb`） | 是 | - | 采样数据回调，签名 `cb(param: jsonobject)`，参数结构见下表 |
+| fail | function（`fail_cb`） | 否 | `null` | 失败回调，签名 `cb(data: string, code: number)` |
+
+**callback 回调参数（jsonobject）**
+
+心率（`dataType = 0`）上报的数据结构（即社区文档中的 `Sample`）：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | object | 采样数据对象 |
+| data.value | number | 心率值（bpm，次/分钟） |
+| data.timeStamp | number | 采样时间戳，单位毫秒（`timestamp_us / 1000`） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `callback id is invalid` | `callback` 不是有效回调 |
+| 202 | `FT_ERR_ARGS` | `data type is invalid` | `dataType` 不是受支持的类型 |
+| 200 | `FT_ERR_GENERAL` | `malloc event failed` / `malloc topic failed` / `subscribe error` | 内存分配失败或 uORB 订阅失败 |
+
+> **社区补充（洛汐文档库）**：社区大赛指南称"未支持的类型会走 fail，错误码为 203（当前数据类型不支持）"，并给出判断示例 `if (code === 203) console.log('当前固件不支持此数据类型')`。
+>
+> 社区资料（洛汐文档库）描述：订阅不支持的数据类型时 fail 回调返回 code 203。
+
+**示例**
+
+```js
+const health = require('service.health')
+
+health.subscribeSample({
+  dataType: health.DATA_TYPES.HEART_RATE,
+  callback: function (param) {
+    console.log('heart rate =', param.data.value, 'bpm @', param.data.timeStamp)
+  },
+  fail: function (data, code) {
+    console.log('subscribe fail', code, data)
+  }
+})
+```
+
+### health.unsubscribeSample(dataType)
+
+取消本页面对指定类型健康数据的订阅。无返回值（`void`），无回调。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| dataType | object（`jsonobject`） | 是 | - | 以 JSON 对象形式传入数据类型，形如 `{ dataType: 0 }`；Native 侧解析其中的 `dataType` 数字字段。无法解析或类型无效时静默忽略 |
+
+**示例**
+
+```js
+const health = require('service.health')
+
+// 取消心率订阅
+health.unsubscribeSample({ dataType: health.DATA_TYPES.HEART_RATE })
+```
+
+> **社区补充（洛汐文档库）**：推荐在页面 `onDestroy` 中取消订阅；声明 `config.background.features` 后应用进入后台仍会收到订阅回调，无需在 `onShow`/`onHide` 重复订阅，但不再使用时必须取消，避免后台功耗与重复回调：
+
+```js
+onDestroy {
+  health.unsubscribeSample({
+    dataType: health.DATA_TYPES.HEART_RATE
+  })
+}
+```
+
+### health.getHr
+
+获取心率。JIDL 中定义为 `void getHr`，**无参数、无返回值、无回调**；当前 Native 实现为空函数（占位接口），调用不会产生任何效果。
+
+> **社区补充（洛汐文档库）**：社区资料将 `getHr` 描述为"读取当前/最近心率的旧便捷入口"，但它没有进入公开指南，旧 JIDL 也没有定义可用的返回对象或回调契约。普通应用应使用采样族接口（`subscribeSample`/`getRecentSamples`）。
+
+**示例**
+
+```js
+const health = require('service.health')
+
+health.getHr
+```
+
+### health.getTodayCalorie
+
+获取今日卡路里消耗。JIDL 中定义为 `void getTodayCalorie`，**无参数、无返回值、无回调**；当前 Native 实现为空函数（占位接口），调用不会产生任何效果。
+
+> **社区补充（洛汐文档库）**：社区资料将其描述为"读取今日活动卡路里相关数据"的便捷成员，同样未进入公开指南、无返回对象或回调契约，卡路里接口在公开版本中尚未开放。
+
+**示例**
+
+```js
+const health = require('service.health')
+
+health.getTodayCalorie
+```
+
+## 错误码汇总
+
+| code | 常量 | 含义 |
+| ---- | ---- | ---- |
+| 200 | `FT_ERR_GENERAL` | 通用/系统错误（内存分配失败、uORB 订阅失败等） |
+| 202 | `FT_ERR_ARGS` | 参数错误，例如 `dataTypes` 缺失或为空、回调非法、数据类型非法 |
+| 203 | — | **社区补充（洛汐文档库）**：当前数据类型不支持（大赛固件行为；开源 dev 分支对应场景返回 202） |
+
+## 数据结构
+
+### getRecentSamplesParam
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| dataTypes | Array&lt;number&gt;（`int[]`） | 要获取的数据类型列表，元素取 `DATA_TYPES` 值 |
+
+### subscribeParam
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| dataType | number（int） | 订阅的数据类型 |
+| callback | function（`sub_cb`） | 采样数据回调，参数为 jsonobject |
+| fail | function（`fail_cb`） | 失败回调，默认 `null`（可不传） |
+
+### 心率采样数据（jsonobject / Sample）
+
+`subscribeSample` 的 callback 参数与 `getRecentSamples` resolve 数组元素的载荷：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | object | 采样数据 |
+| data.value | number | 心率 bpm 值（来自 `algo_heartrate.bpm`） |
+| data.timeStamp | number | 时间戳，毫秒（来自 `algo_heartrate.timestamp_us / 1000`） |
+| dataType | number | 仅 `getRecentSamples` 结果包含：数据类型（`0` 心率） |
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **模块名前缀**：导入时使用 `require('service.health')` / `import health from '@service.health'`，不是 `system.health`。
+- **数据类型**：开源版本仅支持心率（`DATA_TYPES.HEART_RATE = 0`）；传入其他类型值会被忽略或报参数错误。大赛/商业固件可能额外支持血氧（6）、压力（9），使用前务必读取设备实际导出的 `health.DATA_TYPES`，不要硬编码数值假定支持。
+- **权限与后台**：社区大赛文档要求 manifest 同时声明 Feature 与 `hapjs.permission.HEALTH` 权限，后台持续订阅还需配置 `config.background.features`。
+- **平台依赖**：数据来源于 uORB 主题 `algo_heartrate`，需要设备上有心率算法服务（传感器 + 算法）持续发布数据；主题不存在时 `getRecentSamples` 会跳过该类型（全部不可用时 reject 202）。
+- **订阅模型**：uORB 主题订阅在所有订阅者/请求间共享并按引用计数，最后一个订阅者退出后自动关闭主题；同一页面对同一类型重复 `subscribeSample` 会**替换**之前的回调（不会叠加）。
+- **页面生命周期**：页面销毁（detach）时，该页面发起的 `subscribeSample` 订阅会自动取消、未完成的 `getRecentSamples` 请求会被移除；Feature 销毁时关闭全部 uORB 主题。
+- **采样频率**：回调频率取决于算法服务上报节奏（模拟器约 1 Hz，真机压力数据约 60 秒一次），JS 层无频率配置项。
+- **占位接口**：`getHr`、`getTodayCalorie` 当前为空实现，保留给后续版本，请勿依赖其返回。
+
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

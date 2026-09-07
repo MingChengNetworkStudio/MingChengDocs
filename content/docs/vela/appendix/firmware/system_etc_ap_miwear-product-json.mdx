@@ -1,0 +1,45 @@
+---
+title: "AP miwear_product.json"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 1168 字节  
+SHA-256 |  `5a73032ae4ba974a64d3a935ba724da80a6e422b88e187b7982028a52a5b1ea1`  
+加载程序 | AP `rcS` 中的 `miwear_product_load`  
+  
+该文件把硬件 `board_id` 映射为销售型号、MiWear 设备名和产品 ID，使同一 AP 镜像可以服务多个区域/硬件变体。
+
+## 产品映射
+board_id | device_model | miwear_model | miwear_pid | 区域线索  
+---|---|---|---|---  
+20 |  `M2551B1` |  `miwear.watch.p67cn` |  `29598` | 中国大陆  
+21 |  `M2552B1` |  `miwear.watch.p67gl` |  `29601` | 全球版  
+22 |  `M2558B1` |  `miwear.watch.p67gln` |  `33343` | 全球变体  
+23 |  `M2553B1` |  `miwear.watch.p67tc` |  `29599` | 台港等繁中变体  
+24 |  `M2559B1` |  `miwear.watch.p67glt` |  `29600` | 全球变体  
+  
+五条记录的 `device_name` 都是 `Xiaomi Smart Band 10 Pro`。
+
+## 字段意义
+字段 | 用途  
+---|---  
+`board_id` | 从板级/efuse/工厂信息读取的硬件变体编号  
+`device_name` | 展示名称  
+`device_model` | 对外型号，如配对、升级和售后识别  
+`miwear_model` | MiWear 软件产品命名空间  
+`miwear_pid` | 小米穿戴服务使用的数字产品 ID  
+  
+## 启动时行为
+正常 AP 启动且 `/data/nobusiness` 不存在时，`miwear_product_load` 在 Bluetooth、MiWear、健康等服务之前运行。它很可能把匹配记录写入系统属性或共享产品配置，供后续 daemon 使用。
+
+## 修改风险
+改映射可以实验性伪装区域型号，但不会改变射频、NFC、传感器或认证硬件。错误的 PID/model 可能导致：
+
+  * 手机端无法识别或绑定；
+  * OTA 查询到错误产品包；
+  * 云服务、表盘商店和地区功能错配；
+  * 应用根据 `system.device` 返回值走错兼容分支。
+
+不要把其他机型记录直接追加到这里后期待硬件兼容；该文件只做身份映射，不提供驱动。

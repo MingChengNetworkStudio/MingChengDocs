@@ -1,0 +1,332 @@
+---
+title: "system.bluetooth 蓝牙主模块"
+---
+
+> 提供蓝牙适配器的开关、状态查询与状态变化监听能力。该模块存在两套互斥的构建版本：**v1.0 同步回调版**（`CONFIG_BLUETOOTH_FEATURE`）与 **v2.0 异步 Promise 版**（`CONFIG_BLUETOOTH_FEATURE_ASYNC`），同一固件中只会启用其中一套，JS 侧均通过 `require('system.bluetooth')` 导入，实际可用 API 以固件构建版本为准。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.bluetooth` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+| 构建开关 | `CONFIG_BLUETOOTH_FEATURE`（v1.0）与 `CONFIG_BLUETOOTH_FEATURE_ASYNC`（v2.0）二选一互斥；注册见 `frameworks/connectivity/bluetooth/CMakeLists.txt` |
+| v1.0 JIDL 接口 | `openvela/frameworks/connectivity/bluetooth/feature/jidl/bluetooth.jidl` |
+| v1.0 Native 实现 | `openvela/frameworks/connectivity/bluetooth/feature/src/system_bluetooth_impl.c`、`feature_bluetooth_util.c`、`feature_bluetooth_callback.c` |
+| v2.0 JIDL 接口 | `openvela/frameworks/connectivity/bluetooth/feature/feature_async/jidl/bluetooth.jidl` |
+| v2.0 Native 实现 | `openvela/frameworks/connectivity/bluetooth/feature/feature_async/src/bluetooth_impl.c`、`feature_bluetooth_util.c` |
+
+## 接口声明
+
+```json
+{ "name": "system.bluetooth" }
+```
+
+> 说明：官方标准文档站点中名为「蓝牙 bluetooth」的页面（`features/system/bluetooth.html`）实际声明的接口是 `system.bluetooth.ble`（BLE 扫描/GATT 客户端），并未收录本适配器模块（`openAdapter` / `closeAdapter` / `getAdapterState` 等）的独立说明；BLE 相关内容见 [`system.bluetooth.ble`](/docs/vela/quickapp/FeatureAPI/system_bluetooth.ble)。
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import bluetooth from '@system.bluetooth'
+// 或
+const bluetooth = require('@system.bluetooth')
+// 本仓库运行时/测试中使用的写法
+const bluetooth = require('system.bluetooth')
+```
+
+## 功能概述
+
+该模块用于管理本机蓝牙适配器（adapter）：打开/关闭蓝牙、查询适配器是否可用及是否正在扫描（发现设备），并监听适配器状态变化。Native 层通过蓝牙框架的 `bt_adapter_*` 接口操作蓝牙协议栈（v1.0 为同步实例 `bluetooth_get_instance`，v2.0 为基于 IPC 的异步实例 `bluetooth_create_async_instance`，运行在 libuv 事件循环上）。
+
+- **v1.0（同步版）**：提供 `openAdapter` / `closeAdapter` / `getAdapterState` 三个回调风格方法，以及 `onadapterstatechange` 状态属性。
+- **v2.0（异步版）**：当前 JIDL **仅提供 `getAddressAsync` 一个 Promise 方法**（获取本机蓝牙 MAC 地址）；v1.0 中的开/关适配器、状态查询、状态监听等经典蓝牙接口在 v2.0 JIDL 中未定义。BLE 低功耗蓝牙能力请使用独立模块 [`system.bluetooth.ble`](/docs/vela/quickapp/FeatureAPI/system_bluetooth.ble)（仅 v2.0 构建提供）。
+
+典型使用场景：应用进入蓝牙相关页面前先查询/打开适配器，通过 `onadapterstatechange` 感知用户在系统设置中开关蓝牙或切换发现状态；v2.0 固件中可通过 `getAddressAsync` 读取本机蓝牙地址（常用于设备标识、车机账号扫码登录等场景，参见下文社区资料说明）。
+
+> 两套构建由 Kconfig 互斥选择：`CONFIG_BLUETOOTH_FEATURE` 注册 v1.0 的 `system.bluetooth` / `system.bluetooth.bt`（及可选 a2dpsink/avrcpcontrol）；`CONFIG_BLUETOOTH_FEATURE_ASYNC` 注册 v2.0 的 `system.bluetooth` 与 `system.bluetooth.ble`。此外，系统属性 `persist.using_bluetooth_feature`（KVDB，默认 `1`/true）为 false 时 Feature 不会初始化蓝牙实例。
+
+---
+
+# v1.0 同步接口（CONFIG_BLUETOOTH_FEATURE）
+
+> 对应 `module system.bluetooth@1.0`。方法均为回调风格：调用时传入 `success` / `fail` / `complete` 回调；`complete` 无论成功失败都会执行。
+
+## API
+
+### bluetooth.openAdapter(params)
+
+打开蓝牙适配器。Native 同步调用 `bt_adapter_enable`，成功后触发 `success`，失败触发 `fail`。
+
+**参数（OpenAdapterParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| operateAdapter | boolean | 否 | `false` | JIDL 中声明的字段；**当前 Native 实现未读取该字段**，调用 `openAdapter` 总会执行打开适配器操作（具体行为以 Native 实现为准） |
+| success | function | 否 | - | 成功回调 `openAdapterSuccess`，无参数 |
+| fail | function | 否 | - | 失败回调 `openAdapterFail(data, code)` |
+| complete | function | 否 | - | 完成回调 `openAdapterComplete`，无参数 |
+
+**成功返回 / success 回调参数**
+
+无（`openAdapterSuccess` 不带参数）。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- `data`：固定字符串 `"enable fail!"`
+- `code`：Native 直接透传 `bt_adapter_enable` 返回的 `bt_status_t` 原始状态码（非 0 即失败），常见取值见文末【v1.0 状态码】表。
+
+**示例**
+
+```js
+const bluetooth = require('system.bluetooth')
+
+bluetooth.openAdapter({
+  operateAdapter: true,
+  success: function  {
+    console.log('蓝牙已打开')
+  },
+  fail: function (data, code) {
+    console.log('打开蓝牙失败', code, data)
+  },
+  complete: function  {
+    console.log('openAdapter 调用结束')
+  }
+})
+```
+
+### bluetooth.closeAdapter(params)
+
+关闭蓝牙适配器。Native 同步调用 `bt_adapter_disable`。
+
+**参数（CloseAdapterParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| operateAdapter | boolean | 否 | `false` | JIDL 中声明的字段；**当前 Native 实现未读取该字段**，调用 `closeAdapter` 总会执行关闭适配器操作（具体行为以 Native 实现为准） |
+| success | function | 否 | - | 成功回调 `closeAdapterSuccess`，无参数 |
+| fail | function | 否 | - | 失败回调 `closeAdapterFail(data, code)` |
+| complete | function | 否 | - | 完成回调 `closeAdapterComplete`，无参数 |
+
+**成功返回 / success 回调参数**
+
+无。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- `data`：Native 当前返回的字符串为 `"enable fail!"`（源码中开关适配器共用了同一字符串，具体以 Native 实现为准）
+- `code`：`bt_adapter_disable` 返回的 `bt_status_t` 原始状态码，常见取值见文末【v1.0 状态码】表。
+
+**示例**
+
+```js
+const bluetooth = require('system.bluetooth')
+
+bluetooth.closeAdapter({
+  success: function  {
+    console.log('蓝牙已关闭')
+  },
+  fail: function (data, code) {
+    console.log('关闭蓝牙失败', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### bluetooth.getAdapterState(params)
+
+查询蓝牙适配器当前状态。Native 同步读取 `bt_adapter_get_state` 与 `bt_adapter_is_discovering`。该方法**只会回调 `success` 与 `complete`**，Native 实现中不会触发 `fail`。
+
+**参数（GetAdapterStateParams）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 成功回调 `getAdapterStateSuccess(data)`，参数为 `GetAdapterSuccessResult` |
+| fail | function | 否 | - | 失败回调 `getAdapterStateFail(data, code)`（JIDL 定义，Native 实现中不会触发） |
+| complete | function | 否 | - | 完成回调 `getAdapterStateComplete` |
+
+**成功返回 / success 回调参数（GetAdapterSuccessResult）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| available | boolean | 适配器是否已开启（Native 状态为 `BT_ADAPTER_STATE_ON` 时为 true） |
+| discovering | boolean | 适配器是否正在进行设备发现（扫描） |
+
+**示例**
+
+```js
+const bluetooth = require('system.bluetooth')
+
+bluetooth.getAdapterState({
+  success: function (data) {
+    console.log('蓝牙可用：', data.available)
+    console.log('正在扫描：', data.discovering)
+  },
+  fail: function (data, code) {
+    console.log('查询失败', code, data)
+  },
+  complete: function  {}
+})
+```
+
+## 属性（property）
+
+### bluetooth.onadapterstatechange
+
+监听蓝牙适配器状态变化（适配器开关状态、发现状态变化时触发）。通过赋值一个函数注册回调；赋值为其他值可取消。
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| onadapterstatechange | function | 可读写 | 回调签名 `(data: adapterStateCallbackData) => void` |
+
+**回调参数（adapterStateCallbackData）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| available | boolean | 适配器是否已开启（`BT_ADAPTER_STATE_ON` 时为 true） |
+| discovering | boolean | 是否正在发现设备；适配器状态变化回调中取实时发现状态，发现状态变化回调中为"发现已开始" |
+
+> Native 行为：适配器状态变化回调仅在状态为 **ON / OFF** 时上抛（中间状态忽略）；开始/停止发现设备时也会触发一次该回调。回调通过 Feature 事件循环（`FeaturePost`）投递到 JS 线程。
+
+**示例**
+
+```js
+const bluetooth = require('system.bluetooth')
+
+bluetooth.onadapterstatechange = function (data) {
+  console.log('适配器状态变化：available =', data.available, ', discovering =', data.discovering)
+}
+```
+
+## v1.0 状态码
+
+v1.0 的 `fail` 回调 `code` 为蓝牙框架 `bt_status_t` 原始值（定义于 `frameworks/connectivity/bluetooth/framework/include/bt_status.h`），常见值：
+
+| code | 枚举名 | 含义 |
+| ---- | ---- | ---- |
+| 0 | `BT_STATUS_SUCCESS` | 成功（不会进 fail） |
+| 1 | `BT_STATUS_FAIL` | 通用失败 |
+| 2 | `BT_STATUS_NOT_READY`（`BT_STATUS_NOT_ENABLED`） | 蓝牙服务未就绪/未使能 |
+| 3 | `BT_STATUS_NOMEM` | 内存不足 |
+| 4 | `BT_STATUS_BUSY` | 忙 |
+| 5 | `BT_STATUS_DONE` | 请求已完成/重复提交 |
+| 6 | `BT_STATUS_UNSUPPORTED`（`BT_STATUS_NOT_SUPPORTED`） | 不支持（相关 Profile/功能未配置） |
+| 7 | `BT_STATUS_PARM_INVALID` | 参数非法 |
+| 47 | `BT_STATUS_ERROR_BUT_UNKNOWN` | 未知错误（扩展码） |
+| 48 | `BT_STATUS_NOT_FOUND` | 未找到预期对象 |
+| 49 | `BT_STATUS_DEVICE_NOT_FOUND` | 设备未找到 |
+| 51 | `BT_STATUS_NO_RESOURCES` | manager 中资源分配失败 |
+| 52 | `BT_STATUS_IPC_ERROR` | IPC 通信错误 |
+
+---
+
+# v2.0 异步接口（CONFIG_BLUETOOTH_FEATURE_ASYNC）
+
+> 对应 `module system.bluetooth@2.0`。方法为 Promise 风格：`promise<T>` 返回值在 JS 侧以 Promise 形式兑现，`.then` 取成功结果、`.catch` 处理失败。
+
+## API
+
+### bluetooth.getAddressAsync
+
+异步获取本机蓝牙适配器的 MAC 地址。Native 调用 `bt_adapter_get_address_async`，结果经 IPC 异步返回。
+
+**参数**
+
+无。
+
+**Promise resolve 值（object）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| address | string | 本机蓝牙 MAC 地址字符串，形如 `"XX:XX:XX:XX:XX:XX"`（由 `bt_addr_ba2str` 格式化） |
+
+**Promise reject**
+
+- 参数：`(data: string, code: number)`，`data` 为错误信息字符串，`code` 为错误码。
+- 错误信息：`"get address failed!"`（Native 返回地址为空或调用未成功提交时）。
+- 错误码：由蓝牙状态码经 `bt_status_to_feature_error` 转换得到，取值见文末【v2.0 错误码】表。
+
+**示例**
+
+```js
+const bluetooth = require('system.bluetooth')
+
+bluetooth.getAddressAsync.then(function (ret) {
+  console.log('本机蓝牙地址：', ret.address)
+}).catch(function (err) {
+  // err 为错误信息，错误码可从异常对象获取（框架约定）
+  console.log('获取地址失败：', err)
+})
+```
+
+> 社区资料（洛汐文档库）描述：`getAddressAsync(callback)` 为回调风格——原生入口严格要求一个参数且必须是函数，回调值直接是本机蓝牙地址字符串；失败时实现可能不给回调，因此业务侧应自行设置超时。
+
+> 社区资料（洛汐文档库）补充：蓝牙 MAC 属于设备标识。预装汽车应用会同时声明 `hapjs.permission.DEVICE_INFO` 权限；普通应用即使能导入 Feature，也可能被权限或系统签名策略拒绝读取。
+
+## 与 v1.0 的差异
+
+| 对比项 | v1.0（CONFIG_BLUETOOTH_FEATURE） | v2.0（CONFIG_BLUETOOTH_FEATURE_ASYNC） |
+| ---- | ---- | ---- |
+| 异步模型 | success/fail/complete 回调风格 | Promise（`.then` / `.catch`） |
+| 蓝牙实例 | `bluetooth_get_instance` 同步实例 | `bluetooth_create_async_instance`，基于 libuv + IPC 的异步实例 |
+| 适配器开关 | `openAdapter` / `closeAdapter` | **JIDL 中未提供** |
+| 适配器状态查询 | `getAdapterState` | **JIDL 中未提供** |
+| 适配器状态监听 | `onadapterstatechange` 属性 | **JIDL 中未提供** |
+| 获取本机地址 | 未提供 | `getAddressAsync`（resolve `{ address: string }`） |
+| BLE 能力 | 不提供 | 由独立模块 `system.bluetooth.ble` 提供（广播/扫描/GATT 客户端） |
+| 经典蓝牙配对/发现 | 由同套构建的 `system.bluetooth.bt` 模块提供 | v2.0 JIDL 中无对应模块 |
+
+> 说明：v2.0 经典蓝牙功能的迁移情况以 v2.0 JIDL（`feature/feature_async/jidl/bluetooth.jidl`，全文仅 `getAddressAsync` 一个方法）的实际内容为准——当前版本仅提供地址查询，其余经典蓝牙接口尚未在 v2.0 中提供。
+
+## v2.0 错误码
+
+v2.0 Promise reject 的 `code` 为 Feature 框架错误码（`FeatureErrorCode`，定义于 `frameworks/runtimes/feature/include/feature_types.h`）与蓝牙自定义错误码（定义于 `feature/feature_async/include/feature_bluetooth.h`），由 `bt_status_to_feature_error` 从 `bt_status_t` 转换：
+
+| code | 错误码名 | 触发场景（对应蓝牙状态码） |
+| ---- | ---- | ---- |
+| 200 | `FT_ERR_GENERAL` | 通用失败（`BT_STATUS_FAIL`、`BT_STATUS_NOMEM` 等） |
+| 202 | `FT_ERR_ARGS` | 参数非法（`BT_STATUS_PARM_INVALID`） |
+| 203 | `FT_ERR_NOT_SUPPORTED` | 功能不支持（`BT_STATUS_NOT_SUPPORTED`） |
+| 205 | `FT_ERR_DUPLICATE_SUBMISSION` | 重复提交（`BT_STATUS_DONE`） |
+| 10001 | `FEATURE_BT_NOT_ENABLED` | 蓝牙未使能/服务未就绪（`BT_STATUS_NOT_ENABLED`） |
+| 10008 | `FEATURE_BT_UNKNOWN_ERROR` | 未知错误（`BT_STATUS_ERROR_BUT_UNKNOWN`） |
+| 10012 | `FEATURE_BT_IPC_ERROR` | 与蓝牙服务的 IPC 通信错误（`BT_STATUS_IPC_ERROR`） |
+| 10013 | `FEATURE_BT_NO_RESOURCES` | 蓝牙服务资源不足（`BT_STATUS_NO_RESOURCES`） |
+| 10014 | `FEATURE_BT_NOT_FOUND` | 设备/对象未找到（`BT_STATUS_NOT_FOUND`、`BT_STATUS_DEVICE_NOT_FOUND`） |
+
+## 注意事项
+
+- **两套构建互斥**：`CONFIG_BLUETOOTH_FEATURE` 与 `CONFIG_BLUETOOTH_FEATURE_ASYNC` 不可同时启用；JS 代码在调用前应确认固件版本对应的 API 面（v1 回调风格 / v2 Promise 风格），混用不存在的方法会导致调用失败。
+- **系统属性开关**：KVDB 属性 `persist.using_bluetooth_feature` 为 false（默认 true）时，Feature 创建时不会初始化蓝牙实例（实例数据为 NULL），相关调用将无法正常工作。
+- **v1.0 回调一次性**：`openAdapter` / `closeAdapter` / `getAdapterState` 的 success/fail/complete 回调在调用结束后会被 Native 主动移除（`FeatureRemoveCallback`），不会重复触发；持续监听请使用 `onadapterstatechange` 属性。
+- **v1.0 状态监听粒度**：`onadapterstatechange` 仅在适配器进入 ON/OFF 稳定状态、以及发现（discovery）开始/停止时上抛数据；适配器开关的中间过渡状态不会触发。
+- **v2.0 异步实例生命周期**：v2.0 蓝牙实例由 Feature Manager 按用户数据持有（`FEATURE_MANAGER_BLUETOOTH_DATA`），`system.bluetooth` 与 `system.bluetooth.ble` 共享同一异步实例与 IPC 连接；IPC 断连时 Native 仅记录日志。
+- **v2.0 地址读取的健壮性**（社区资料：洛汐文档库）：社区实践建议对 `getAddressAsync` 增加超时保护，避免底层异常时 Promise 长时间不兑现；读取本机蓝牙地址可能涉及设备标识权限，普通应用可能被系统策略拒绝。
+- **相关模块**：经典蓝牙配对/发现 `system.bluetooth.bt`、A2DP Sink `system.bluetooth.bt.a2dpsink`、AVRCP Control `system.bluetooth.bt.avrcpcontrol` 仅在 v1.0 构建中随 `CONFIG_BLUETOOTH_A2DP_SINK` / `CONFIG_BLUETOOTH_AVRCP_CONTROL` 等开关注册；BLE 广播/扫描/GATT 见 `system.bluetooth.ble`（仅 v2.0）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 部分支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

@@ -1,0 +1,4 @@
+{
+  "title": "控件",
+  "pages": ["object", "label", "image", "list", "roller", "checkbox", "dropdown", "keyboard", "led", "calendar", "textarea", "analogtime", "curvedlabel", "imagebar", "imagelabel", "imagelinebar", "pointer", "thumbnail"]
+}

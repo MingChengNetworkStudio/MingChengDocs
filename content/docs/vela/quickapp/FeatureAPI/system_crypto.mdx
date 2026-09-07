@@ -1,0 +1,939 @@
+---
+title: "system.crypto 加解密"
+---
+
+> 提供哈希摘要、HMAC、RSA 签名/验签、RSA/AES 加解密、Base64 编解码、HKDF 密钥派生以及 ECDH 密钥协商等常用密码学能力。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.crypto` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.crypto" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import crypto from '@system.crypto'
+// 或
+const crypto = require('@system.crypto')
+// 本仓库运行时/测试中使用的写法
+const crypto = require('system.crypto')
+```
+
+## 功能概述
+
+`system.crypto` 面向快应用提供密码学工具集：
+
+- **摘要类**：`hashDigest`（MD5/SHA1/SHA256/SHA512，支持直接传数据或传应用包内文件路径）、`hmacDigest`（带密钥的 HMAC 摘要）。
+- **RSA 签名类**：`sign` / `verify`，支持对内存数据或包内文件签名/验签。
+- **加解密类**：`encrypt` / `decrypt`，支持 RSA（PKCS#1 v1.5）与 AES（CBC/ECB/CCM 模式，128/192/256 位密钥）。
+- **编码类**：`btoa` / `atob` 进行 Base64 编码/解码。
+- **密钥派生与协商**：`hkdf`（HKDF，基于 SHA256/SHA512）、`createECDH` 创建 ECDH 对象（当前仅支持 `secp256r1` 曲线）进行密钥协商。
+
+Native 层基于 libuv 扩展（`uv_ext`，底层为 mbedTLS）实现，文件类入参通过 `app_relative_to_absolute_path` 转换为应用包内绝对路径后读取。带 `success`/`fail`/`complete` 回调的方法均为异步调用；不传回调时可使用 Promise 风格（`.then`/`.catch`）。`hashDigest`、`btoa`、`atob` 以及 ECDH 的 `getPrivateKey`/`getPublicKey` 为同步方法，直接返回结果。
+
+> 官方标准文档收录了 `hashDigest`、`hmacDigest`、`sign`、`verify`、`encrypt`、`decrypt`、`btoa`、`atob` 共 8 个方法；`hkdf`、`createECDH`（含 ECDH 对象的 5 个方法）、AES-CCM 认证加密（`aad`/`tag`/`tagLen`）、Uint8Array 入参/出参以及文件 `uri` 入参等能力为 openvela 实证实现支持、官方文档未收录的扩展能力。
+
+## API
+
+### crypto.hashDigest(options)
+
+计算消息摘要（MD5/SHA1/SHA256/SHA512），**同步方法**，直接返回十六进制摘要字符串。数据来源二选一：`data`（内存数据）或 `uri`（应用包内文件相对路径）。
+
+**参数（HashDigestParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string \| Uint8Array | 否 | - | 待摘要的数据；与 `uri` 二选一 |
+| uri | string | 否 | - | 待摘要文件的应用包内相对路径；与 `data` 二选一 |
+| algo | string | 否 | `"SHA256"` | 摘要算法：`"MD5"` / `"SHA1"` / `"SHA256"` / `"SHA512"` |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | string | 十六进制（hex）摘要字符串；参数错误或计算失败时返回空值（null/undefined） |
+
+**失败行为**
+
+该方法为同步方法、无 fail 回调。以下情况返回空值：`algo` 不在支持列表内；`data` 与 `uri` 同时提供或都不提供；`data` 类型不是 string/Uint8Array；Native 计算失败。
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+// 对字符串做 SHA256 摘要
+const hash = crypto.hashDigest({
+  data: 'hello world',
+  algo: 'SHA256'
+})
+console.log(hash)
+
+// 对 Uint8Array 做摘要
+const bytes = new Uint8Array([0x01, 0x02, 0x03])
+const hash2 = crypto.hashDigest({ data: bytes, algo: 'SHA1' })
+
+// 对应用包内文件做 MD5 摘要
+const fileHash = crypto.hashDigest({
+  uri: 'assets/test.bin',
+  algo: 'MD5'
+})
+```
+
+### crypto.hmacDigest(options)
+
+计算 HMAC 消息认证码，**异步方法**（回调风格 / Promise 风格）。
+
+**参数（HmacDigestParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string | 是 | - | 待计算的消息字符串 |
+| key | string | 是 | - | HMAC 密钥字符串 |
+| algo | string | 否 | `"SHA256"` | 摘要算法：`"MD5"` / `"SHA1"` / `"SHA256"` / `"SHA512"` |
+| success | function | 否 | - | 成功回调，参数为对象 `{ data: string }`，`data` 为十六进制 HMAC 字符串 |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调（成功/失败都会调用） |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string | 十六进制（hex）HMAC 摘要字符串 |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(data: string, code: number)`
+- 实现中实际返回的错误码与信息：
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `invalid algo param` | `algo` 不在 MD5/SHA1/SHA256/SHA512 范围内 |
+| 202 | `arguments data and key are needed` | 缺少 `data` 或 `key` |
+| 200 | Native 错误信息（`crypto_err`）或 `digest error` | Native 层 HMAC 计算失败 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+// 回调风格
+crypto.hmacDigest({
+  data: 'message',
+  key: 'secret-key',
+  algo: 'SHA256',
+  success: function (ret) {
+    console.log('hmac:', ret.data)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  },
+  complete: function  {}
+})
+
+// Promise 风格
+crypto.hmacDigest({
+  data: 'message',
+  key: 'secret-key',
+  algo: 'SHA256'
+}).then(ret => {
+  console.log('hmac:', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+### crypto.sign(options)
+
+使用 RSA 私钥对数据进行签名，**异步方法**（回调风格 / Promise 风格）。数据来源二选一：`data`（string 或 Uint8Array）或 `uri`（应用包内文件相对路径）。
+
+**参数（SignParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string \| Uint8Array | 否 | - | 待签名数据；与 `uri` 二选一 |
+| uri | string | 否 | - | 待签名文件的应用包内相对路径；与 `data` 二选一 |
+| algo | string | 否 | `"RSA-SHA256"` | 签名哈希算法：`"RSA-MD5"` / `"RSA-SHA1"` / `"RSA-SHA256"` / `"RSA-SHA512"` |
+| privateKey | string | 是 | - | RSA 私钥（PEM 格式字符串） |
+| success | function | 否 | - | 成功回调，参数为对象 `{ data: string \| Uint8Array }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string \| Uint8Array | 签名结果。入参 `data` 为 string（或使用 `uri`）时，返回 Base64 编码的签名字符串；入参 `data` 为 Uint8Array 时，返回签名原始字节 Uint8Array |
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `invalid algo param!` | `algo` 不合法 |
+| 202 | `arguments privateKey is needed` | 缺少 `privateKey` |
+| 202 | `arguments data or uri is needed` | `data` 和 `uri` 都未提供 |
+| 202 | `arguments data and uri are only needed for one` | `data` 和 `uri` 同时提供 |
+| 202 | `invalid data type!` | `data` 类型不是 string/Uint8Array 或长度为 0 |
+| 200 | Native 错误信息或 `rsa sign error` / `rsa sign file error` | Native 签名失败（如私钥格式错误） |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const privateKey = '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'
+
+// 回调风格
+crypto.sign({
+  data: 'data to sign',
+  algo: 'RSA-SHA256',
+  privateKey: privateKey,
+  success: function (ret) {
+    console.log('signature(base64):', ret.data)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格（对 Uint8Array 签名，返回 Uint8Array）
+crypto.sign({
+  data: new Uint8Array([1, 2, 3, 4]),
+  privateKey: privateKey
+}).then(ret => {
+  console.log('signature bytes:', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+### crypto.verify(options)
+
+使用 RSA 公钥验证签名，**异步方法**（回调风格 / Promise 风格）。验签结果通过 success 回调的布尔值返回。
+
+**参数（RSAVerifyParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string \| Uint8Array | 否 | - | 原始数据；与 `uri` 二选一 |
+| uri | string | 否 | - | 原始文件的应用包内相对路径；与 `data` 二选一 |
+| algo | string | 否 | `"RSA-SHA256"` | 签名哈希算法：`"RSA-MD5"` / `"RSA-SHA1"` / `"RSA-SHA256"` / `"RSA-SHA512"` |
+| signature | string \| Uint8Array | 是 | - | 签名值。string 类型按 Base64 解码后验签；Uint8Array 按原始字节处理 |
+| publicKey | string | 是 | - | RSA 公钥（PEM 格式字符串） |
+| success | function | 否 | - | 成功回调，参数为 boolean：`true` 验签通过，`false` 验签不通过 |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | boolean | `true` 表示签名验证通过；`false` 表示签名不匹配（注意：签名不匹配走 success 回调而非 fail） |
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `invalid algo param!` | `algo` 不合法 |
+| 202 | `arguments publicKey and signature are needed` | 缺少 `publicKey` 或 `signature` |
+| 202 | `arguments data or uri is needed` | `data` 和 `uri` 都未提供 |
+| 202 | `arguments data and uri are only needed for one` | 两者同时提供 |
+| 202 | `data: invalid data type!` / `signature: invalid data type!` | 入参类型错误 |
+| 200 | Native 错误信息（`crypto_err`） | Native 验签过程出错（如公钥格式错误） |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const publicKey = '-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----'
+
+// 回调风格
+crypto.verify({
+  data: 'data to sign',
+  signature: 'base64-signature-string',
+  algo: 'RSA-SHA256',
+  publicKey: publicKey,
+  success: function (result) {
+    console.log('verify result:', result)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格
+crypto.verify({
+  data: 'data to sign',
+  signature: 'base64-signature-string',
+  publicKey: publicKey
+}).then(valid => {
+  console.log('valid:', valid)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+### crypto.encrypt(options)
+
+使用 RSA 或 AES 算法加密数据，**异步方法**（回调风格 / Promise 风格）。
+
+**参数（CryptParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string \| Uint8Array | 是 | - | 待加密数据。string 类型：加密结果返回 Base64 字符串；Uint8Array：返回原始字节 Uint8Array |
+| algo | string | 否 | `"RSA"` | 加密算法：`"RSA"` 或 `"AES"` |
+| key | string \| Uint8Array | 是 | - | 密钥。RSA：PEM 格式公钥字符串；AES：string 时按 Base64 解码为密钥字节（官方文档描述为"经过 base64 编码后生成的字符串"），Uint8Array 时为原始密钥字节（长度须为 16/24/32 字节） |
+| options | MixinCryptOption | 否 | `null` | AES 附加选项（模式/填充/IV/AAD/Tag 等），见[数据结构](#mixincryptoption)；RSA 一般不需要 |
+| success | function | 否 | - | 成功回调，参数为对象 `{ data, tag? }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**options 字段说明（官方标准文档口径）**
+
+- RSA：`transformation` 表示 RSA 算法的加密模式和填充项，默认为 `"RSA/None/PKCS1Padding"`。
+- AES：`transformation` 默认为 `"AES/CBC/PKCS7Padding"`；`iv` 为 AES 加解密的初始向量（Base64 编码字符串），**默认值为 key**（即不传 IV 时取密钥字节作为 IV）；`ivOffset` 为初始向量偏移（整数，默认 0）；`ivLen` 为初始向量字节长度（整数，默认 16）。
+
+> 官方标准文档仅列出 `transformation`/`iv`/`ivOffset`/`ivLen` 四个 AES 选项；openvela 实证实现还支持 AES-CCM 认证加密相关的 `aad`/`tag`/`tagLen` 字段以及 ECB 模式，详见[数据结构](#mixincryptoption)。
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string \| Uint8Array | 密文。入参为 string 时返回 Base64 字符串；入参为 Uint8Array 时返回 Uint8Array |
+| tag | string \| Uint8Array | 仅 AES-CCM 认证加密时存在：认证标签 Tag，类型与 `data` 一致（string 入参为 Base64，Uint8Array 入参为原始字节） |
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `wrong top options, please check arguments` | 顶层参数错误（缺 key/data、key/data 类型错误、AES 密钥 Base64 解码失败等） |
+| 203 | `unsupported algorithm cipher, please check transformation` | `transformation` 不受支持 |
+| 203 | `unsupported AES key size for default transformation` | 使用默认 transformation 但 AES 密钥长度不是 16/24/32 字节 |
+| 202 | `wrong internal options, please check arguments` | AES 选项错误（IV Base64 非法、CCM 未提供 IV、IV 长度不在 7~13、ivLen/ivOffset/tagLen 为负、AAD/Tag 解码失败等） |
+| 202 | `aes-ccm decrypt requires tag input` | （decrypt）AES-CCM 解密未提供 tag |
+| 200 | `rsa_crypto failed` / `aes non auth crypto error` / `aes auth crypto error` / `malloc ... failed` / `base64 encode result failed` 等 | Native 加密失败或内存分配失败 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+// RSA 加密（公钥 PEM），回调风格
+crypto.encrypt({
+  data: 'secret text',
+  algo: 'RSA',
+  key: '-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----',
+  success: function (ret) {
+    console.log('ciphertext(base64):', ret.data)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// AES-CBC 加密（密钥与 IV 均为 Base64 字符串），Promise 风格
+crypto.encrypt({
+  data: 'secret text',
+  algo: 'AES',
+  key: 'MTIzNDU2Nzg5MDEyMzQ1Ng==', // 16 字节密钥的 Base64
+  options: {
+    transformation: 'AES/CBC/PKCS7Padding',
+    iv: 'AAAAAAAAAAAAAAAAAAAAAA=='  // 16 字节 IV 的 Base64
+  }
+}).then(ret => {
+  console.log('ciphertext(base64):', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+
+// AES-CCM 认证加密（Uint8Array 入参，返回 data 与 tag）
+crypto.encrypt({
+  data: new Uint8Array([1, 2, 3, 4]),
+  algo: 'AES',
+  key: new Uint8Array(32), // 32 字节密钥
+  options: {
+    transformation: 'AES/CCM/NoPadding',
+    iv: new Uint8Array(13),
+    aad: new Uint8Array([0xaa, 0xbb]),
+    tagLen: 4
+  }
+}).then(ret => {
+  console.log('ciphertext:', ret.data, 'tag:', ret.tag)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+官方示例（AES 密钥可用 `btoa` 把口令文本转为 Base64 后传入）：
+
+```js
+crypto.encrypt({
+  // 待加密的文本内容
+  data: 'hello',
+  // base64 编码后的加密密钥
+  key: crypto.btoa('KEYKEYKEYKEYKEYK'),
+  algo: 'AES',
+  success: function (res) {
+    console.log('crypto.encrypt success:', res.data)
+  },
+  fail: function (data, code) {
+    console.log('crypto.encrypt fail', code, data)
+  }
+})
+```
+
+### crypto.decrypt(options)
+
+使用 RSA 或 AES 算法解密数据，参数结构与 `encrypt` 完全相同（`CryptParam`），**异步方法**（回调风格 / Promise 风格）。
+
+**参数（CryptParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | string \| Uint8Array | 是 | - | 密文。string 类型会先按 Base64 解码再解密，解密结果必须是合法 UTF-8 字符串；Uint8Array 按原始字节处理，返回 Uint8Array |
+| algo | string | 否 | `"RSA"` | 解密算法：`"RSA"` 或 `"AES"` |
+| key | string \| Uint8Array | 是 | - | 密钥。RSA：PEM 格式私钥字符串；AES：string 按 Base64 解码，Uint8Array 为原始字节 |
+| options | MixinCryptOption | 否 | `null` | AES 附加选项；CCM 解密时必须提供 `tag` |
+| success | function | 否 | - | 成功回调，参数为对象 `{ data: string \| Uint8Array }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string \| Uint8Array | 明文。密文入参为 string 时返回 UTF-8 明文字符串；密文入参为 Uint8Array 时返回 Uint8Array |
+
+**失败回调 fail / Promise reject**
+
+错误码与 `encrypt` 一致；此外解密特有：
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `aes-ccm decrypt requires tag input` | AES-CCM 解密未提供 `options.tag` |
+| 200 | `the decrypt result is not utf-8` | string 入参解密结果不是合法 UTF-8（二进制明文请改用 Uint8Array 入参） |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+// RSA 解密（私钥 PEM），回调风格
+crypto.decrypt({
+  data: 'base64-ciphertext',
+  algo: 'RSA',
+  key: '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----',
+  success: function (ret) {
+    console.log('plaintext:', ret.data)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// AES-CBC 解密，Promise 风格
+crypto.decrypt({
+  data: 'base64-ciphertext',
+  algo: 'AES',
+  key: 'MTIzNDU2Nzg5MDEyMzQ1Ng==',
+  options: {
+    transformation: 'AES/CBC/PKCS7Padding',
+    iv: 'AAAAAAAAAAAAAAAAAAAAAA=='
+  }
+}).then(ret => {
+  console.log('plaintext:', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+
+// AES-CCM 解密（需传入加密时得到的 tag）
+crypto.decrypt({
+  data: cipherBytes,       // Uint8Array
+  algo: 'AES',
+  key: keyBytes,           // Uint8Array
+  options: {
+    transformation: 'AES/CCM/NoPadding',
+    iv: ivBytes,           // Uint8Array
+    tag: tagBytes,         // Uint8Array，加密时返回的 tag
+    aad: new Uint8Array([0xaa, 0xbb])
+  }
+}).then(ret => {
+  console.log('plaintext bytes:', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+官方示例（与上文 `btoa` 密钥配套的 AES 解密）：
+
+```js
+crypto.decrypt({
+  // 待解密的内容（Base64 密文）
+  data: 'WB96uM08PfYIHu5G1p6YwA==',
+  // base64 编码后的密钥
+  key: crypto.btoa('KEYKEYKEYKEYKEYK'),
+  algo: 'AES',
+  success: function (res) {
+    console.log('crypto.decrypt success:', res.data)
+  },
+  fail: function (data, code) {
+    console.log('crypto.decrypt fail', code, data)
+  }
+})
+```
+
+### crypto.btoa(text)
+
+将字符串进行 Base64 编码，**同步方法**。官方文档语义：从 String 对象创建一个 Base64 编码的 ASCII 字符串，字符串中的每个字符都被视为一个二进制数据字节。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| text | string | 是 | - | 待编码的字符串 |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | string | Base64 编码结果字符串；入参为空或编码失败时返回空值 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const encoded = crypto.btoa('hello world')
+console.log(encoded) // 'aGVsbG8gd29ybGQ='
+```
+
+### crypto.atob(text)
+
+将 Base64 字符串解码为原始字符串，**同步方法**。官方文档语义：对经过 Base64 编码的字符串进行解码。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| text | string | 是 | - | Base64 编码字符串 |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | string | 解码后的字符串；入参为空或非法 Base64 时返回空值 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const encodeString = crypto.btoa('hello')
+const decoded = crypto.atob(encodeString)
+console.log(decoded) // 'hello'
+```
+
+### crypto.hkdf(options)
+
+使用 HKDF 算法派生密钥，**异步方法**（回调风格 / Promise 风格）。
+
+**参数（HkdfParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| algo | string | 否 | `""`（实现按 `"SHA256"` 处理） | HMAC 哈希算法，实现仅支持 `"SHA256"` / `"SHA512"` |
+| key | string \| Uint8Array | 是 | - | 输入密钥材料（IKM）。string 按 Base64 解码，Uint8Array 为原始字节 |
+| salt | string \| Uint8Array | 是 | - | 盐值。string 按 Base64 解码，Uint8Array 为原始字节 |
+| info | string \| Uint8Array | 是 | - | 上下文信息（info）。string 按 Base64 解码，Uint8Array 为原始字节 |
+| keyLen | number(int) | 是 | - | 期望派生的密钥字节长度，必须大于 0 |
+| success | function | 否 | - | 成功回调，参数为对象 `{ data: Uint8Array }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | Uint8Array | 派生出的密钥字节（固定返回 Uint8Array） |
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `key, salt and info must be valid` | `key`/`salt`/`info` 缺失 |
+| 202 | `wrong input parament` | 参数类型/Base64 解码失败，或 `keyLen <= 0` |
+| 203 | `wrong algorithm` | `algo` 不是 SHA256/SHA512 |
+| 200 | `create hkdf key failed` / `malloc output failed` | Native 派生失败或内存分配失败 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+// 回调风格
+crypto.hkdf({
+  algo: 'SHA256',
+  key: new Uint8Array(32),   // 32 字节输入密钥
+  salt: new Uint8Array(16),
+  info: new Uint8Array([1, 2, 3]),
+  keyLen: 32,
+  success: function (ret) {
+    console.log('derived key:', ret.data) // Uint8Array(32)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格（string 入参按 Base64 解码）
+crypto.hkdf({
+  algo: 'SHA256',
+  key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+  salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+  info: 'AQID',
+  keyLen: 16
+}).then(ret => {
+  console.log('derived key:', ret.data)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+### crypto.createECDH(type)
+
+创建 ECDH 密钥协商对象，**同步方法**，返回 ECDH 实例。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | string | 是 | - | 曲线名称。Native 实现当前仅支持 `"secp256r1"`（其余曲线如 secp384r1、secp256k1、curve25519 等均标记为不支持） |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | ECDH 对象 | ECDH 实例，方法见下文 [ECDH 接口](#ecdh-接口)；曲线不受支持时实例方法会返回失败 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+```
+
+## ECDH 接口
+
+通过 `crypto.createECDH('secp256r1')` 获得的对象，包含以下方法：
+
+### ecdh.generateKeys(param)
+
+生成 ECDH 密钥对，**异步方法**（回调风格 / Promise 风格）。
+
+**参数（CurveParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| encoding | string | 否 | `""` | 公钥返回编码：`"buffer"` 或 `""` 返回 Uint8Array（65 字节未压缩公钥）；`"base64"` 返回 Base64 字符串；`"hex"` 返回十六进制字符串 |
+| success | function | 否 | - | 成功回调，参数为对象 `{ publicKey: string \| Uint8Array }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| publicKey | string \| Uint8Array | 生成的公钥，编码格式由 `encoding` 决定 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+
+// 回调风格
+ecdh.generateKeys({
+  encoding: 'base64',
+  success: function (ret) {
+    console.log('public key:', ret.publicKey)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格
+ecdh.generateKeys({ encoding: 'hex' })
+  .then(ret => console.log('public key(hex):', ret.publicKey))
+  .catch(err => console.log('fail', err))
+```
+
+### ecdh.getPrivateKey(encoding)
+
+获取本机私钥，**同步方法**（需先调用 `generateKeys` 或 `setPrivateKey`）。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| encoding | string | 是 | - | `"buffer"` 或 `""` 返回 Uint8Array（32 字节）；`"base64"` 返回 Base64 字符串；`"hex"` 返回十六进制字符串 |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | string \| Uint8Array | 私钥；未生成密钥对或编码非法时返回空值 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+ecdh.generateKeys({ encoding: 'buffer' })
+
+const privHex = ecdh.getPrivateKey('hex')
+console.log('private key(hex):', privHex)
+
+const privBytes = ecdh.getPrivateKey('buffer')
+console.log('private key bytes:', privBytes)
+```
+
+### ecdh.getPublicKey(encoding)
+
+获取本机公钥，**同步方法**（需先调用 `generateKeys` 或 `setPrivateKey`）。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| encoding | string | 是 | - | `"buffer"` 或 `""` 返回 Uint8Array（65 字节未压缩公钥）；`"base64"` 返回 Base64 字符串；`"hex"` 返回十六进制字符串 |
+
+**返回值**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| 返回值 | string \| Uint8Array | 公钥；未生成密钥对或编码非法时返回空值 |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+ecdh.generateKeys({ encoding: 'buffer' })
+
+const pubB64 = ecdh.getPublicKey('base64')
+console.log('public key(base64):', pubB64)
+```
+
+### ecdh.setPrivateKey(param)
+
+导入外部私钥并据此重建密钥对（同时推导公钥），**异步方法**（回调风格 / Promise 风格）。
+
+**参数（setPrivateKeyParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| privateKey | string \| Uint8Array | 是 | - | 私钥。string 类型按 PEM 格式解析；Uint8Array 按二进制私钥处理（secp256r1 为 32 字节） |
+| success | function | 否 | - | 成功回调（实现以空字符串调用，表示设置成功） |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+无业务数据（成功回调被调用即表示私钥设置成功，之后可通过 `getPublicKey`/`getPrivateKey` 读取重建的密钥对）。
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 200 | `please create ECDH object first` | ECDH 对象未正确初始化（如曲线不受支持） |
+| 202 | `privateKey is NULL` / `get_buff failed` | 未提供 `privateKey` 或类型/长度错误 |
+| 200 | `ECDH_generate_keypair_by_pem failed` / `ECDH_generate_keypair_by_binary failed` / `ECDH_allocate_keys failed` | Native 导入失败（PEM 格式错误、字节长度不正确等） |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+
+// 回调风格：导入 PEM 私钥
+ecdh.setPrivateKey({
+  privateKey: '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----',
+  success: function  {
+    console.log('private key set, public key:', ecdh.getPublicKey('base64'))
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格：导入 32 字节二进制私钥
+ecdh.setPrivateKey({ privateKey: new Uint8Array(32) })
+  .then( => console.log('ok'))
+  .catch(err => console.log('fail', err))
+```
+
+### ecdh.computeSecret(param)
+
+用对端公钥与本机私钥计算 ECDH 共享密钥，**异步方法**（回调风格 / Promise 风格）。
+
+**参数（ComputeParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| otherPublicKey | string \| Uint8Array | 是 | - | 对端公钥 |
+| inputEncoding | string | 否 | `""` | 对端公钥的输入编码：`"base64"` / `"hex"` / `"buffer"` / `""`（按原始字节） |
+| outputEncoding | string | 否 | `""` | 共享密钥的输出编码：`"buffer"` 或 `""` 返回 Uint8Array；`"base64"` 返回 Base64 字符串；`"hex"` 返回十六进制字符串 |
+| success | function | 否 | - | 成功回调，参数为对象 `{ shareKey: string \| Uint8Array }` |
+| fail | function | 否 | - | 失败回调 `(data: string, code: number)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| shareKey | string \| Uint8Array | 协商出的共享密钥（secp256r1 为 32 字节），编码格式由 `outputEncoding` 决定 |
+
+**失败回调 fail / Promise reject**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 200 | `please create ECDH object first` | ECDH 对象未正确初始化 |
+| 202 | `otherPublicKey is NULL` / `wrong otherPublicKey type` | 未提供对端公钥或类型错误 |
+| 202 | `ecdh_get_decoding_data failed` / `ecdh_get_encoding_data failed` | 输入编码非法（非 base64/hex/buffer）或解码失败 |
+| 200 | `ECDH_compute_shared_key failed` / `malloc ... failed` | Native 计算失败（如对端公钥曲线不匹配） |
+
+**示例**
+
+```js
+const crypto = require('system.crypto')
+
+const ecdh = crypto.createECDH('secp256r1')
+ecdh.generateKeys({ encoding: 'base64' })
+
+// 回调风格
+ecdh.computeSecret({
+  otherPublicKey: 'peer-public-key-base64',
+  inputEncoding: 'base64',
+  outputEncoding: 'hex',
+  success: function (ret) {
+    console.log('shared secret(hex):', ret.shareKey)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// Promise 风格
+ecdh.computeSecret({
+  otherPublicKey: peerPubKeyBytes, // Uint8Array
+  inputEncoding: 'buffer',
+  outputEncoding: 'buffer'
+}).then(ret => {
+  console.log('shared secret bytes:', ret.shareKey)
+}).catch(err => {
+  console.log('fail', err)
+})
+```
+
+## 数据结构
+
+### MixinCryptOption
+
+`encrypt` / `decrypt` 的 `options` 字段，用于配置 AES 算法参数。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ------ | ---- |
+| transformation | string | `"AES/CBC/PKCS7Padding"` | 算法/模式/填充描述串，见下方支持列表 |
+| iv | string | `""` | IV。string 类型必须是 **Base64 编码**；AES-CCM 加密/解密时必传，且解码后长度须为 7~13 字节。非认证模式不传时，默认取密钥前 `ivLen` 字节作为 IV（官方文档口径：IV 默认值为 key） |
+| ivOffset | number(int) | `0` | IV 起始偏移，须为非负数（实现中大于 0 会报越界错误） |
+| ivLen | number(int) | `0` | IV 字节长度。不传 `iv` 时默认 16；传 `iv` 时须与 Base64 解码后的实际长度一致 |
+| aad | string \| Uint8Array | `null` | 附加认证数据（仅 AES-CCM）。string 按 Base64 解码 |
+| tagLen | number(int) | `4` | 认证标签长度（字节），仅加密时生效，须为非负数 |
+| tag | string \| Uint8Array | `null` | 认证标签，仅 AES-CCM 解密时必传。string 按 Base64 解码 |
+
+**支持的 transformation（Native 实现中的白名单）**
+
+| transformation | 密钥长度 | 支持情况 |
+| ---- | ---- | ---- |
+| `AES/CBC/PKCS5Padding` | 16/24/32 字节 | ✅ |
+| `AES/CBC/PKCS7Padding` | 16/24/32 字节 | ✅（默认） |
+| `AES/CBC/NoPadding` | 16 字节 | ✅ |
+| `AES/ECB/PKCS5Padding` | 16 字节 | ✅ |
+| `AES/ECB/PKCS7Padding` | 16 字节 | ✅ |
+| `AES/CCM/NoPadding` | 16/24/32 字节 | ✅（认证加密，返回 tag） |
+| `AES/CBC/ZeroPadding`、`AES/CBC/ISO10126Padding`、`AES/ECB/ZeroPadding`、`AES/ECB/NoPadding`、`AES/ECB/ISO10126Padding` | - | ❌ 不支持 |
+| `RSA/None/PKCS1Padding` | - | RSA 仅在显式传入 `options.transformation` 时校验该值 |
+
+### 错误码
+
+Native 实现（`crypto_utils.h` 中 `Cipher_ErrorCode`）定义的错误码：
+
+| code | 枚举名 | 含义 |
+| ---- | ------ | ---- |
+| 0 | GOOD | 成功 |
+| 200 | GENERAL | 通用错误（Native 计算失败、内存分配失败等） |
+| 202 | ARGSERROR | 参数错误 |
+| 203 | UNSUPPORTED | 不支持的算法/参数组合 |
+| 204 | TIMEOUT | 超时（当前实现未使用） |
+| 300 | IOERROR | IO 错误（当前实现未使用） |
+
+## 注意事项
+
+- **权限**：使用本 Feature 不需要声明额外权限。
+- **string vs Uint8Array 的语义差异**（重要）：
+  - 加解密（`encrypt`/`decrypt`）、HKDF、AES 的 `iv`/`aad`/`tag` 中，**string 入参一律按 Base64 解码**为字节后处理；Uint8Array 入参按原始字节处理。
+  - `encrypt` 的 string 入参 → 密文以 Base64 字符串返回；Uint8Array 入参 → 密文以 Uint8Array 返回。
+  - `decrypt` 的 string 入参会先 Base64 解码，且**解密结果必须是合法 UTF-8 字符串**，否则报错（`the decrypt result is not utf-8`）；二进制明文请使用 Uint8Array。
+  - `sign`：string/`uri` 入参 → 签名为 Base64 字符串；Uint8Array 入参 → 签名为 Uint8Array。`verify` 的 string 签名按 Base64 解码。
+- **文件入参（uri）**：`hashDigest`/`sign`/`verify` 的 `uri` 是**应用包内相对路径**，Native 通过 `app_relative_to_absolute_path(pkg, uri)` 转换为绝对路径读取；`data` 与 `uri` 必须二选一，同时提供会报参数错误。
+- **AES 默认行为**：不传 `options`（或 `transformation` 为空）时使用 `AES/CBC/PKCS7Padding`，IV 默认取**密钥的前 16 字节**（`ivLen` 默认 16）；密钥长度决定 AES-128/192/256。AES-CCM 为认证模式，加密结果额外返回 `tag`，解密必须回传 `tag`，且 IV 长度限制为 7~13 字节。
+- **RSA**：密钥为 PEM 格式字符串；加解密使用 PKCS#1 v1.5 padding。
+- **摘要算法**：`hashDigest`/`hmacDigest` 支持 MD5、SHA1、SHA256、SHA512；签名算法为 `RSA-MD5`/`RSA-SHA1`/`RSA-SHA256`/`RSA-SHA512`；HKDF 仅支持 SHA256/SHA512。
+- **ECDH**：当前 Native 白名单中仅 `secp256r1` 标记为支持（私钥 32 字节、公钥 65 字节未压缩格式）；使用其它曲线名创建的对象，其方法会返回失败。
+- **同步方法**（`hashDigest`、`btoa`、`atob`、`createECDH`、`ecdh.getPrivateKey`、`ecdh.getPublicKey`）直接返回结果，失败时返回空值（null/undefined），不会抛异常；其余方法为异步回调风格，不传 `success`/`fail` 时可使用 Promise 的 `.then`/`.catch`。
+- **安全建议**：不要在日志中打印私钥、AES 密钥、IV 或明文；MD5/SHA1 仅建议用于兼容旧协议，新业务应使用 SHA256 及以上算法。
+- 具体行为以 Native 实现为准。
+
+## 机型支持明细
+
+> 以下为官方标准文档公布的机型支持情况（openvela 开源版本是否可用以实际固件/Native 实现为准）。
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

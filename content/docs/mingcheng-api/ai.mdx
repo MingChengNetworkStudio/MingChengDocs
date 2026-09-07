@@ -1,0 +1,109 @@
+---
+title: AI 模型中转
+icon: MagicWand
+description: OpenAI / Anthropic 双协议兼容的模型中继，自动双向转换与计费
+---
+
+> 模块类型：service ｜ 基础路径：`/api/v2/ai` ｜ 鉴权：复合 Bearer Key（见下）
+
+**OpenAI / Anthropic 双协议兼容**的模型中继：无论上游配置的是哪家供应商，下游都能用 OpenAI 或 Anthropic 任一格式调用，由中转层自动双向转换（请求体、非流式响应、流式 SSE）。
+
+## 鉴权（非标准 apikey）
+
+请求头使用应用名与设备 apiKey 组合，以**最后一个 `-`** 连接：
+
+```
+Authorization: Bearer <appname>-<设备apiKey>
+```
+
+```
+Authorization: Bearer Eternal-K1aURbTQHzpB...（64 位设备 key）
+```
+
+- 应用须启用 `ai` 服务，否则 403；Key 无效 401；额度不足 402。
+- Anthropic 端点也接受 `x-api-key: <appname>-<apiKey>`。
+
+---
+
+## 端点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v2/ai/v1/chat/completions` | OpenAI 协议入口，返回 OpenAI 格式 |
+| POST | `/api/v2/ai/v1/messages` | Anthropic 协议入口，返回 Anthropic 格式 |
+| GET | `/api/v2/ai/v1/models` | 列出该应用可用模型（下游别名） |
+
+请求体分别是标准 OpenAI Chat Completions / Anthropic Messages 结构（`model`、`messages`、`system`、`max_tokens`、`stream`、`tools`、`temperature` 等）。
+
+---
+
+## 模型列表
+
+- `GET /v1/models` 返回所有可用别名：
+
+```json
+{
+  "object": "list",
+  "data": [ { "id": "claude", "object": "model", "owned_by": "<appname>" } ]
+}
+```
+
+---
+
+## 调用示例
+
+**OpenAI SDK（下游 OpenAI 协议）：**
+
+```js
+const openai = new OpenAI({
+  baseURL: 'https://你的域名/api/v2/ai/v1',
+  apiKey: 'Eternal-<设备apiKey>'
+});
+
+await openai.chat.completions.create({
+  model: 'claude',            // 下游别名；即使上游是 Anthropic 也自动转换
+  messages: [{ role: 'user', content: '你好' }],
+  stream: true
+});
+```
+
+**Anthropic 协议：**
+
+```bash
+curl https://你的域名/api/v2/ai/v1/messages \
+  -H "Authorization: Bearer Eternal-<设备apiKey>" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"gpt-4o","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'
+# 上游即使是 OpenAI，也会在这里被转成 Anthropic 响应格式
+```
+
+---
+
+## 计费
+
+按**应用计费模式**与**该模型配置的单价**结算，每次调用计一次：
+
+| 应用 billingMode | 计费方式 |
+|---|---|
+| `usage` / `free-usage` | 金额。模型配了 token 单价（`priceInput`/`priceOutput`）时按真实 token 后置结算：`输入token × priceInput + 输出token × priceOutput`（单价：元 / 百万 token）；未配则按 `costUsage`（元 / 次）固定扣 |
+| `normal` / `free-limit` | 次数额度，每次扣 `costRequest`（默认 1） |
+| `subscribe` | 订阅期内不限次，仅校验到期 |
+| `free-share` | 免费用户走共享计数 |
+
+<Callout type="info">
+token 用量取自上游返回的 `usage`：非流式读响应体；流式从 SSE 末尾的 usage 事件累加。token 计费为**后置结算**（转发前仅校验余额 > 0），固定单价为**转发前预扣**；上游返回错误（≥400）不扣费。
+</Callout>
+
+---
+
+## 错误码
+
+| 状态 | 含义 |
+|---|---|
+| 400 | 缺少 `model` / 请求格式问题 |
+| 401 | 复合 Key 无效 |
+| 402 | 余额 / 额度不足 |
+| 403 | 应用未启用 ai 服务 / 订阅过期 |
+| 404 | 模型（别名）未配置 |
+| 502 | 上游请求失败 |

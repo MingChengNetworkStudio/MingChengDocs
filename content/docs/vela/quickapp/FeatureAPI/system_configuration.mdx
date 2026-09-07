@@ -1,0 +1,114 @@
+---
+title: "system.configuration 系统配置"
+---
+
+> 查询系统当前的语言与国家/地区设置（区域信息）。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.configuration` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+无需声明（官方标准文档口径：本模块不需要在 `manifest.json` 中声明接口或权限）。
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import configuration from '@system.configuration'
+// 或
+const configuration = require('@system.configuration')
+// 本仓库运行时/测试中使用的写法
+const configuration = require('system.configuration')
+```
+
+## 功能概述
+
+`system.configuration` 提供获取系统区域设置的能力，当前版本仅包含一个同步方法 `getLocale`，返回系统的语言（`language`）和国家/地区（`countryOrRegion`），可用于界面文案的多语言切换、地区相关功能的判断。
+
+官方标准文档对该方法的描述为：**获取应用当前的语言环境。默认使用系统的语言环境，会因为设置或系统语言环境改变而发生变化**。
+
+> 官方标准文档描述为"获取应用当前的语言环境"；openvela 实证实现直接读取系统属性 `persist.locale`（系统语言环境）。
+
+底层通过 libuv 扩展 `uv_getlocale` 读取系统属性 `persist.locale`（属性值形如 `"zh_CN"`），以下划线 `_` 拆分后分别填入返回结构的 `language` 与 `countryOrRegion` 字段。若系统未设置该属性（读取失败），Native 实现会将 `persist.locale` 写入默认值 `"zh_CN"` 并重新读取，因此未配置区域的设备上默认返回中文/中国（`zh` / `CN`）。
+
+## API
+
+### configuration.getLocale
+
+获取当前系统的语言与国家/地区设置。**同步方法**，无参数，直接返回 `Configuration` 对象，无 success/fail 回调，也不返回 Promise。
+
+**参数**
+
+无。
+
+**返回值（Configuration 对象）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| language | string | 语言代码，取自系统属性 `persist.locale` 下划线前的部分，如 `"zh"`、`"en"`；字段最长 9 个字符 |
+| countryOrRegion | string | 国家或地区代码，取自下划线后的部分，如 `"CN"`、`"US"`；字段最长 9 个字符 |
+
+**示例**
+
+```js
+const configuration = require('system.configuration')
+
+const locale = configuration.getLocale
+console.log('language:', locale.language)           // 例如 "zh"
+console.log('countryOrRegion:', locale.countryOrRegion) // 例如 "CN"
+
+// 典型用途：按语言切换界面文案
+if (locale.language === 'zh') {
+  console.log('你好')
+} else {
+  console.log('Hello')
+}
+```
+
+## 数据结构
+
+### Configuration
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| language | string | 语言代码（如 `"zh"`） |
+| countryOrRegion | string | 国家/地区代码（如 `"CN"`） |
+
+## 注意事项
+
+- **同步调用**：`getLocale` 是 JIDL 中直接返回结构体的同步方法（非 `void` + 回调模式），调用后立即拿到结果，不需要回调，也不返回 Promise。
+- **数据来源与默认值**：区域信息来自系统属性 `persist.locale`，值的格式为 `<语言>_<地区>`（如 `"zh_CN"`），实现按 `_` 拆分成两个字段；若属性不存在或格式不完整导致读取失败，Native 实现会自动把 `persist.locale` 置为默认值 `"zh_CN"` 后重试，即设备未配置区域时默认返回 `language="zh"`、`countryOrRegion="CN"`。
+- **字段长度限制**：底层 `language` 与 `country_region` 缓冲区大小均为 10 字节（`UV_EXT_LOCALE_MAX_SIZE`），即每个字段最多容纳 9 个有效字符。
+- 该模块只提供**读取**区域设置的能力，JIDL 未定义修改系统语言/地区的方法。
+- 依赖 libuv 扩展层的属性服务（`uv_property_get`/`uv_property_set`，对应系统属性 `persist.locale`）；返回的语言/地区代码大小写与属性值中的写法一致（如 `zh_CN` → `zh` / `CN`），具体行为以 Native 实现为准。
+- 与功能接近的 `locale` Feature（`locale.get`）相比，本模块是官方公开的标准接口名（`@system.configuration`），新应用建议优先使用本模块。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

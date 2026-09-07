@@ -1,0 +1,61 @@
+---
+title: 全局函数总览
+description: LVGL 全局函数索引（样式、事件、动画补充）
+---
+
+- [HOR_RES](/docs/vela/LUA/LVGL/globals/functions/HOR_RES) — 水平分辨率常量
+- [VER_RES](/docs/vela/LUA/LVGL/globals/functions/VER_RES) — 垂直分辨率常量
+- [PCT](/docs/vela/LUA/LVGL/globals/functions/PCT) — 百分比换算
+- [OPA](/docs/vela/LUA/LVGL/globals/functions/OPA) — 不透明度换算
+- [Font](/docs/vela/LUA/LVGL/globals/functions/Font) — 字体函数
+- [Style](/docs/vela/LUA/LVGL/globals/functions/Style) — 样式 API
+- [Timer](/docs/vela/LUA/LVGL/globals/functions/Timer) — 定时器 API
+- [Anim](/docs/vela/LUA/LVGL/globals/functions/Anim) — 动画 API
+
+---
+
+### 社区补充（洛汐文档库）
+
+> 以下内容来自洛汐文档库《LVGL 样式、事件与动画》：[docs.luoxe.cn/docs/vela/lua/lvgl-style-animation](https://docs.luoxe.cn/docs/vela/lua/lvgl-style-animation/)
+> 样式、动画相关补充已分别织入 [Style](/docs/vela/LUA/LVGL/globals/functions/Style) 与 [Anim](/docs/vela/LUA/LVGL/globals/functions/Anim)；定时器补充见 [Timer](/docs/vela/LUA/LVGL/globals/functions/Timer)。
+
+#### 事件
+
+便捷回调：
+
+```lua
+object:onPressed(function(target, code)
+  print("pressed", target, code)
+end)
+
+object:onClicked(function(target, code)
+  print("clicked", target, code)
+end)
+```
+
+指定事件：
+
+```lua
+object:onevent(lvgl.EVENT.VALUE_CHANGED, function(target, code)
+  print("value changed")
+end)
+```
+
+回调执行时对象可能在回调中被删除。删除后不要继续调用 `target`，也不要在闭包中长期保存已退出页面的 userdata。
+
+#### 机型可用性
+
+| 能力 | Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+| --- | --- | --- |
+| Style 与对象样式 | ✅ | ✅ |
+| 对象事件 | ✅ | ✅ |
+| 对象属性动画 | ✅ | ✅ |
+| Anim 对象 | ✅ | ✅ |
+
+#### 获取源代码
+
+- [社区 LVGL Style 文档](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua/lvgl)
+- [LVGL Styles](https://docs.lvgl.io/master/details/common-widget-features/styles/)
+- [LVGL Animations](https://docs.lvgl.io/master/details/main-modules/animation.html)
+
+参考来源：官方 docs-lua / 洛汐文档库 https://docs.luoxe.cn/

@@ -1,0 +1,188 @@
+---
+title: "system.schedule 定时/调度任务（Rust 实现，UNSTABLE）"
+---
+
+> 注册定时/周期调度任务，并可取消已注册的任务。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.schedule` |
+| Feature 类型 | **Rust 实现 Feature**（**不稳定版**；位于 `CONFIG_FEATURE_RUST_MODULES_UNSTABLE` 开关下，依赖总开关 `CONFIG_FEATURE_RUST_MODULES`，接口与行为可能变更） |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import schedule from '@system.schedule'
+// 本仓库运行时/测试中使用的写法
+const schedule = require('system.schedule')
+```
+
+## 功能概述
+
+本 Feature 提供 `scheduleJob`（注册调度任务）与 `cancel`（取消任务）两个方法，用于让快应用在指定时间点或按固定时间间隔被系统重新拉起/触发。Rust 实现本身不做计时，而是在 feature 实例创建时通过 `vdk::qapp_rpc` 建立到快应用调度服务（quick-app schedule service）的 RPC 客户端，把任务的 `type`、`timeout`、`interval`、`triggerMethod`、`params` 连同**当前快应用包名**（由 feature 框架上下文自动获取）一起通过 RPC 发送给调度服务；任务触发时由调度服务按 `triggerMethod` 回调应用。任务 id 由调度服务分配并返回，应用需保存该 id 用于 `cancel`。
+
+## API
+
+本模块全部为 **Promise 风格**。
+
+### schedule.scheduleJob(job)
+
+注册一个调度任务。成功后 resolve 任务 id。
+
+**参数（job 对象字段，对应 JIDL `Job` 结构）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | number（int） | 是 | - | 任务类型，原样透传给调度服务（测试脚本中使用 `1`）；具体取值含义由调度服务定义 |
+| timeout | number（long） | 是 | - | 任务超时/首次触发时间，原样透传给调度服务（测试脚本中以毫秒形式使用，如 `1000`、`60000`）；单位以调度服务为准 |
+| interval | number（long） | 是 | - | 周期触发间隔，原样透传给调度服务（测试脚本中以毫秒形式使用，如 `500`、`10000`）；单位以调度服务为准 |
+| triggerMethod | string | 否 | 缺省时 Native 以字符串 `"none"` 透传 | 任务触发时要回调的应用方法名 |
+| params | object（jsonobject） | 否 | 缺省时 Native 以字符串 `"none"` 透传 | 触发时回传给应用的参数（任意 JSON 对象） |
+
+**Promise resolve 值（SuccessInfo）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| id | number（int） | 调度服务分配的任务 id，用于 `cancel` 取消任务 |
+
+**Promise reject**
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| -28 | `job is none` | 未传 job 参数 |
+| -27 | `schedule_job failed!` | 无法获取当前快应用包名，或 RPC 调用调度服务 `add_task` 失败（调度服务不可用等） |
+
+> 注：feature 实例创建时若 RPC 客户端建立失败，Native 会直接 panic（`new ScheduleImpl failed`）；因此使用本模块要求系统中调度服务可用。
+
+**示例**
+
+```js
+const schedule = require('system.schedule')
+
+const job = {
+  type: 1,
+  timeout: 1000,      // 首次触发时间
+  interval: 500,      // 周期间隔
+  triggerMethod: 'start',
+  params: { key: 'xiaomi', value: 'vela' }
+}
+
+schedule.scheduleJob(job).then(info => {
+  console.log('scheduled, job id:', info.id)
+}).catch(err => {
+  console.log('scheduleJob fail', err.code, err.data)
+})
+
+// async/await 写法
+async function registerJob {
+  try {
+    const info = await schedule.scheduleJob(job)
+    console.log('job id:', info.id)
+    return info.id
+  } catch (err) {
+    console.log('scheduleJob fail', err.code, err.data)
+  }
+}
+```
+
+### schedule.cancel(id)
+
+取消已注册的调度任务。
+
+**参数**
+
+JIDL 签名为 `promise<void> cancel(int id)`，直接传入任务 id（非 params 对象）：
+
+| 参数 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| id | number（int） | 是 | `scheduleJob` 成功时返回的任务 id |
+
+**Promise resolve 值**
+
+无（`promise<void>`）。
+
+**Promise reject**
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| -26 | `cancel failed!` | RPC 调用调度服务 `delete_task` 失败（服务不可用或任务不存在等） |
+
+**示例**
+
+```js
+const schedule = require('system.schedule')
+
+async function cancelJob(id) {
+  try {
+    await schedule.cancel(id)
+    console.log('job canceled:', id)
+  } catch (err) {
+    console.log('cancel fail', err.code, err.data)
+  }
+}
+
+// 典型用法：注册 3 秒后取消
+schedule.scheduleJob({
+  type: 1,
+  timeout: 60000,
+  interval: 10000,
+  triggerMethod: 'start',
+  params: { key: 'key', value: 'value' }
+}).then(info => {
+  setTimeout( => cancelJob(info.id), 3000)
+})
+```
+
+## 数据结构
+
+### Job
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| type | number（int） | 任务类型，透传给调度服务 |
+| timeout | number（long） | 超时/首次触发时间 |
+| interval | number（long） | 周期触发间隔 |
+| triggerMethod | string | 触发时回调的应用方法名；缺省透传 `"none"` |
+| params | object（jsonobject） | 触发时回传的参数；缺省透传 `"none"` |
+
+### SuccessInfo
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| id | number（int） | 调度服务分配的任务 id |
+
+## 注意事项
+
+- **不稳定模块**：本模块在 `CONFIG_FEATURE_RUST_MODULES_UNSTABLE` 开关下构建，API 与错误码（-26/-27/-28）为当前 Rust 实现定义，后续可能调整。
+- **依赖调度服务**：Rust 侧仅做 RPC 转发，实际定时/拉起逻辑由快应用调度服务完成；`type`/`timeout`/`interval` 的取值与时间单位以调度服务实现为准（仓库自带测试脚本中按毫秒使用）。
+- **包名自动注入**：注册任务时 Native 自动取当前快应用包名一并提交，无需也无法在参数中指定；取不到包名时以 code -27 失败。
+- **任务 id 需自行保存**：`cancel` 必须传入 `scheduleJob` 返回的 id；id 由调度服务分配。
+- RPC 客户端在 feature 实例初始化时同步建立（`block_on`），调度服务不可用时实例创建会失败。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 不支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

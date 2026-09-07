@@ -1,0 +1,414 @@
+---
+title: "system.storage 键值存储"
+---
+
+> 提供轻量级本地键值（key-value）持久化存储，支持读写、删除、清空、按键名索引遍历，数据按应用包名隔离存储。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.storage` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.storage" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import storage from '@system.storage'
+// 或
+const storage = require('@system.storage')
+// 本仓库运行时/测试中使用的写法
+const storage = require('system.storage')
+```
+
+## 功能概述
+
+`system.storage` 为快应用提供简单的字符串键值持久化能力，接口形态与 Web `localStorage` 类似：`set` 写入、`get` 读取（支持默认值）、`delete` 删除、`clear` 清空、`key` 按索引取键名、`length` 属性获取键数量。官方标准文档将其定位为"数据存储 storage"，适合保存应用配置、用户偏好等轻量数据。
+
+底层在 Feature 创建时打开一个 **unqlite** 数据库文件，路径为 `<数据目录>/system/<应用包名>/usr.db`（数据目录为编译配置 `CONFIG_HAP_APP_PATH`，未配置时为 `/data/quickapp`），因此存储按应用包名隔离。除 `get_sync` 外，读写操作通过 libuv 工作线程（`uv_queue_work`）异步执行，完成后在事件循环线程回调 JS；`get_sync` 在调用线程同步执行。数据库句柄同时注册给快应用调试器（`InspectHostStorageInit`）。
+
+## API
+
+> 所有方法均为**回调风格**（JIDL 无 `promise<T>` 声明），公共回调：
+>
+> - `success(value)`：JIDL 为 `callback success_cb(string value)`，参数为字符串。
+> - `fail(errorMsg, code)`：JIDL 为 `callback fail_cb(string errorMsg, int code)`。
+> - `complete(msg)`：JIDL 为 `callback complete_cb(string msg)`，参数为 `"success"` 或 `"fail"`。
+
+### storage.get(info)
+
+异步读取存储内容（指定键的值）。键不存在时**不算失败**，success 回调返回 `default`；如果 `default` 未指定，返回长度为 0 的空字符串。
+
+**参数（GetInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | - | 键名（索引） |
+| default | string | 否 | `""` | 键不存在时 success 回调返回的默认值（JIDL 字段名即为 `default`）；未指定时返回空字符串 |
+| success | function | 否 | - | 成功回调，`(value: string)` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | key 对应的存储内容；键不存在时为 `default`（默认空字符串） |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| -1 | `default` 参数的值 | `key` 为空字符串/缺失（Native 实现将默认值作为错误信息传入，code 为 -1） |
+| -1 | `"FeatureGetObjectData fail"` | 存储上下文初始化失败 |
+| unqlite 错误码（负数） | `uv_strerror(status)` | 底层数据库读取失败 |
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+storage.get({
+  key: 'username',
+  default: 'guest',
+  success: function (value) {
+    console.log('value:', value) // 键不存在时输出 'guest'
+  },
+  fail: function (errorMsg, code) {
+    console.log('get fail', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('get complete:', msg) // 'success' / 'fail'
+  }
+})
+```
+
+### storage.get_sync(info)
+
+`get` 的同步版本：在调用线程内直接完成数据库读取，参数与回调结构与 `get` 相同（仍通过 success/fail/complete 回调返回结果）。
+
+**参数（GetInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | - | 键名 |
+| default | string | 否 | `""` | 键不存在时返回的默认值 |
+| success | function | 否 | - | 成功回调，`(value: string)` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 键对应的值；键不存在时为 `default` |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"key is empty"` | `key` 为空字符串/缺失 |
+| -1 | `"FeatureGetObjectData fail"` | 存储上下文初始化失败 |
+| unqlite 错误码（负数） | `uv_strerror(status)` | 底层数据库读取失败 |
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+storage.get_sync({
+  key: 'username',
+  default: 'guest',
+  success: function (value) {
+    console.log('sync value:', value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('get_sync fail', code, errorMsg)
+  }
+})
+```
+
+### storage.set(info)
+
+异步修改存储内容（写入键值）。若 `value` 为空字符串 `""`，Native 会**改为删除该键**（等价于 `delete`；官方标准文档同样说明：新值是长度为 0 的空字符串时，会删除以 key 为索引的数据项）。
+
+**参数（SetInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | - | 键名（索引），不可为空 |
+| value | string | 否 | `""` | 要存储的字符串新值；空字符串表示删除该键 |
+| success | function | 否 | - | 成功回调，`(value: string)` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 实现固定传入 `"0"`（底层回调的占位返回值） |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"fail"` | `key` 为空，或 `value` 为 null |
+| 202 | `"FeatureGetObjectData fail"` | 存储上下文初始化失败 |
+| 负数错误码 | `"uv_db_set fail"` 等 | 底层数据库写入/删除失败 |
+
+> 注：空值触发删除时，若该键原本就不存在（unqlite 返回 NOTFOUND），Native 也按**成功**处理。
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+storage.set({
+  key: 'username',
+  value: 'openvela',
+  success: function (value) {
+    console.log('set success:', value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('set fail', code, errorMsg)
+  }
+})
+
+// value 传空字符串等价于删除该键
+storage.set({
+  key: 'username',
+  value: '',
+  success: function  {
+    console.log('deleted via set')
+  },
+  fail: function (errorMsg, code) {
+    console.log('set fail', code, errorMsg)
+  }
+})
+```
+
+### storage.clear(info)
+
+清空存储内容（本应用存储中的全部数据）：Native 关闭数据库、删除数据库文件（`unlink`）后重新初始化空库。
+
+**参数（ClearInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 成功回调，`(value: string)` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 实现固定传入 `"succcess"`（Native 源码中的拼写） |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| -1 | `"FeatureGetObjectData fail"` | 存储上下文初始化失败 |
+| 负数错误码 | `"uv_db_close fail"` / `"uv_db_init fail"` | 数据库关闭或重新初始化失败 |
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+storage.clear({
+  success: function (value) {
+    console.log('clear success:', value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('clear fail', code, errorMsg)
+  }
+})
+```
+
+### storage.delete(info)
+
+异步删除存储内容（指定键）。
+
+**参数（DeleteInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | - | 要删除的键名（索引） |
+| success | function | 否 | - | 成功回调，`(value: string)` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 实现固定传入 `"0"` |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"fail"` | `key` 为空 |
+| 202 | `"FeatureGetObjectData fail"` | 存储上下文初始化失败 |
+| 200 | `uv_strerror(200)` | 删除的键不存在（unqlite NOTFOUND 被转换为 200） |
+| 负数错误码 | `"uv_db_delete fail"` / `uv_strerror(status)` | 底层删除失败 |
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+storage.delete({
+  key: 'username',
+  success: function (value) {
+    console.log('delete success:', value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('delete fail', code, errorMsg) // 删除不存在的键时 code 为 200
+  }
+})
+```
+
+### storage.key(info)
+
+按索引获取键名（索引从 0 开始，顺序由 unqlite 游标遍历决定）。
+
+`key` 用于按数据库内部顺序枚举 key。**顺序不应视为插入顺序或稳定排序；删除/新增记录后索引可能变化**（社区资料：洛汐文档库）。固件明确拒绝 `index < 0`；索引越过末尾时底层 `uv_db_key` 会失败，因此**不要无上限扫描**，应在已知上限内逐项读取并在失败时结束。
+
+**参数（KeyInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| index | int | 是 | - | 键的索引，从 0 开始，必须不小于 0 |
+| success | function | 否 | - | 成功回调，`(value: string)`，返回该索引处的键名（key 字符串） |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，`(msg: string)` |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 索引 `index` 处的键名字符串 |
+
+**失败回调 fail**
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| -1 | `"fail"` | `index < 0` |
+| -1 | `"FeatureGetObjectData fail"` / `"uv_db_key fail"` | 存储上下文初始化失败或底层调用失败 |
+| 负数错误码 | `uv_strerror(status)` | 索引超出键总数等数据库错误 |
+
+**示例**
+
+```js
+const storage = require('system.storage')
+
+// 遍历所有键
+for (let i = 0; i < storage.length + 1; i++) {
+  storage.key({
+    index: i,
+    success: function (keyName) {
+      console.log('key at', i, ':', keyName)
+    },
+    fail: function (errorMsg, code) {
+      console.log('key fail', code, errorMsg)
+    }
+  })
+}
+```
+
+社区资料（洛汐文档库）给出的、不依赖 `length` 属性的 Promise 风格枚举示例：
+
+```js
+function getKeyAt(index) {
+  return new Promise((resolve, reject) => {
+    storage.key({
+      index,
+      success: resolve,
+      fail: (message, code) => reject({ message, code })
+    })
+  })
+}
+
+async function listKeys(max = 100) {
+  const keys = []
+  for (let index = 0; index < max; index++) {
+    try {
+      keys.push(await getKeyAt(index))
+    } catch (e) {
+      break // 越过末尾时 uv_db_key 失败，结束枚举
+    }
+  }
+  return keys
+}
+```
+
+## 属性（property）
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `length` | int | 只读（赋值为空实现） | 已存储键的数量计数。Native 通过 unqlite 游标遍历计数：空数据库返回 `-1`，有 n 个键时返回 `n - 1`（即返回值 = 键总数 - 1，仓库测试以此为准：空库 -1、2 个键时 1、1 个键时 0），具体行为以 Native 实现为准 |
+
+```js
+const storage = require('system.storage')
+
+console.log('storage length:', storage.length)
+```
+
+> 社区资料（洛汐文档库）：在部分商业机型固件（如 Xiaomi Smart Band 10 Pro、Xiaomi Watch S4 41mm）上，`key` 接口确认可用，但未观察到公开的 `length` 属性与 `get_sync` 实现符号。openvela 开源仓库实证中 `length` 与 `get_sync` 均已实现，本文以实证为准；商业机型上如需枚举键，建议使用上文不依赖 `length` 的 `listKeys` 写法。
+
+## 数据结构
+
+| Struct | 字段 | 用途 |
+| ------ | ---- | ---- |
+| GetInfo | `key: string`、`default: string = ""`、success/fail/complete | `get` / `get_sync` 参数 |
+| SetInfo | `key: string`、`value: string = ""`、success/fail/complete | `set` 参数 |
+| ClearInfo | success/fail/complete | `clear` 参数 |
+| DeleteInfo | `key: string`、success/fail/complete | `delete` 参数 |
+| KeyInfo | `index: int`、success/fail/complete | `key` 参数 |
+
+## 注意事项
+
+- **存储隔离与持久化**：数据保存在 `<CONFIG_HAP_APP_PATH 或 /data/quickapp>/system/<包名>/usr.db`，按应用包名隔离；数据库目录不存在时 Native 会逐级 `mkdir` 创建。
+- **值类型**：本模块只存取**字符串**；需要存储对象/数字时请自行 `JSON.stringify` / `JSON.parse`。
+- **键不存在不算失败**：`get` / `get_sync` 查不到键时走 success 回调并返回 `default`（默认空字符串），不会触发 fail。
+- **空值即删除**：`set` 传入 `value: ''` 会被转为删除操作；删除不存在的键也按成功处理（与显式 `delete` 删除不存在的键返回 200 失败不同，具体以 Native 实现为准）。
+- **clear 的实现方式**：关闭并直接删除整个数据库文件后重新建库，清空后 `length` 回到空库值（-1）。
+- **key 枚举顺序**：键名顺序由 unqlite 游标遍历的数据库内部顺序决定，不应假设为插入顺序或字典序；删除/新增记录后索引可能变化，枚举时应在失败处停止，不要无上限扫描（社区资料：洛汐文档库）。
+- **异步模型**：`get` / `set` / `delete` / `key` / `clear` 通过 libuv 工作线程异步执行，回调在事件循环线程触发；`get_sync` 在调用线程同步读库，可能阻塞 JS 执行，仅建议在必要场景使用。
+- **complete 回调参数**：成功时为 `"success"`，失败时为 `"fail"`；注意部分失败分支 code 为正数（如 202/200）时 complete 仍可能收到 `"success"`（Native 以 `status >= 0` 判断），判断结果请以 success/fail 回调为准。
+- **错误码**：参数类错误多为 202（ARGSERROR）/ -1；数据库错误透传 unqlite 负数错误码（如 NOTFOUND 为 -6，已在各接口内部特殊处理），错误信息来自 `uv_strerror`。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

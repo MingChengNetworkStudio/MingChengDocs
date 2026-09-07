@@ -238,6 +238,7 @@ html[data-theme-transition="active"] #nd-page .prose :where(
     --wearpost-color: #8b5cf6;
     --simplefetch-color: #0ea5e9;
     --mingcheng-color: #f59e0b;
+    --vela-color: #6366f1;
 }
 
 .dark {
@@ -252,6 +253,7 @@ html[data-theme-transition="active"] #nd-page .prose :where(
     --wearpost-color: #a78bfa;
     --simplefetch-color: #38bdf8;
     --mingcheng-color: #fbbf24;
+    --vela-color: #818cf8;
 }
 
 /* Eternal 永昼天气 文档主题色 */
@@ -304,6 +306,19 @@ body.mingcheng {
 .dark body.mingcheng {
     --color-fd-primary-foreground: #451a03;
     --color-fd-accent: color-mix(in srgb, var(--mingcheng-color) 15%, transparent);
+}
+
+/* Vela 开发文档主题色（vela section） */
+body.vela {
+    --color-fd-primary: var(--vela-color);
+    --color-fd-primary-foreground: #ffffff;
+    --color-fd-accent: color-mix(in srgb, var(--vela-color) 12%, transparent);
+    --color-fd-ring: var(--vela-color);
+}
+
+.dark body.vela {
+    --color-fd-primary-foreground: #1e1b4b;
+    --color-fd-accent: color-mix(in srgb, var(--vela-color) 15%, transparent);
 }
 
 #nd-home-layout {

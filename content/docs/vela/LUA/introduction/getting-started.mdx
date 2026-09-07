@@ -1,0 +1,116 @@
+---
+title: 快速开始
+description: 第一个 Lua 应用 / 表盘：验证 API 的推荐流程与三步上手
+---
+
+本分区是一套 **Lua 应用开发文档**，内容主要来源于工程源码、镜像分析与运行时验证。
+
+## 建议阅读顺序
+
+1. [概览](/docs/vela/LUA/introduction/overview)：了解有哪些模块、文档覆盖范围
+2. [文档约定](/docs/vela/LUA/introduction/conventions)：重要安全提示与可信度说明
+3. `lvgl/overview`：UI 控件体系与全局函数（新手最常用）
+4. `dataman/overview`：数据订阅与页面联动
+5. `animengine/overview`：动画引擎（模板化配置、生命周期管理）
+6. `activity/overview` / `navigator/overview` / `vibrator/overview`：页面状态、退出逻辑、触觉反馈
+
+## 在设备/模拟器上验证 API（推荐流程）
+
+<Callout type="warn">
+强烈建议把探索代码放在 **按钮事件** 或 **定时器回调** 中触发，避免在脚本初始化阶段直接跑测试逻辑。
+</Callout>
+
+### 1) 快速查看模块是否存在
+
+```lua
+print("lvgl:", lvgl)
+print("dataman:", dataman)
+print("topic:", topic)
+print("activity:", activity)
+print("animengine:", animengine)
+print("navigator:", navigator)
+print("screen:", screen)
+print("vibrator:", vibrator)
+```
+
+### 2) 枚举模块成员（表类型模块适用）
+
+```lua
+local function dumpTable(name, t)
+  print("==", name, "==")
+  if type(t) ~= "table" then
+    print("not a table:", type(t))
+    return
+  end
+  for k, v in pairs(t) do
+    print(k, v)
+  end
+end
+
+-- 建议在按钮回调/Timer 中调用
+dumpTable("topic", topic)
+dumpTable("vibrator", vibrator)
+```
+
+### 3) 用“最小可运行示例”验证行为
+
+以 `dataman.subscribe` 为例：先验证能否订阅、回调是否触发，再逐步补充主题与 payload 结构。
+
+```lua
+local token = dataman.subscribe("sys.time", function(p)
+  print("time payload:", p)
+end)
+
+-- 若页面进入编辑态/隐藏态，按需暂停
+-- dataman.pause(token)
+-- dataman.resume(token)
+```
+
+### 社区补充：洛汐快速上手（三步写出第一个表盘）
+
+社区实战文档给出了一条更短的上手路径，可与上面的验证流程配合使用。
+
+**第一步：在脚本顶部引入最小模块集**
+
+```lua
+local lvgl = require("lvgl")
+local dataman = require("dataman")
+local topic = require("topic")
+local activity = require("activity")
+local animengine = require("animengine")
+local navigator = require("navigator")
+local vibrator = require("vibrator")
+local screen = require("screen")
+```
+
+<Callout type="warn">
+`screen` 当前返回空表，不要假定 `screen.ON`/`screen.OFF` 等常量存在；模块由表盘宿主注入，不能在快应用 RPK 中直接 `require`。
+</Callout>
+
+**第二步：记住三个生命周期入口**
+
+| 函数 | 调用时机 | 应做的工作 |
+|------|----------|------------|
+| `ui.init(style)` | 创建表盘 | 创建根对象、控件、订阅与动画 |
+| `pageOnPause` | 表盘隐藏或进入编辑态 | 暂停定时器和订阅、移除动画 |
+| `pageOnResume` | 表盘重新显示 | 恢复订阅、计时和必要动画 |
+
+完整的“最小表盘”示例（全屏根对象 + 居中时间标签 + `dataman.subscribe` + 暂停/恢复）见 [概览 · 社区补充：表盘开发场景](/docs/vela/LUA/introduction/overview#社区补充表盘开发场景)。
+
+**第三步：上手前先看环境限制**
+
+- Lua 版本为 5.4.0；
+- 动态库加载关闭，`package.loadlib` 不可用（不能加载 `.so`）；`io.popen` 不可用；
+- 文件读写受进程权限和挂载属性限制；
+- 探测/试验代码务必放在按钮事件或短周期定时器回调中，不要在初始化阶段直接跑，避免初始化失败导致整个表盘无法显示。
+
+**社区资源**
+
+- [社区 Lua 表盘开发文档（GitHub）](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua)
+- [Lua 5.4 参考手册](https://www.lua.org/manual/5.4/manual.html)
+- [LVGL 源码](https://github.com/lvgl/lvgl)
+
+## 参考来源
+
+- 官方文档：docs-lua《快速开始》
+- 洛汐社区文档库：《Lua 表盘开发总览》（[https://docs.luoxe.cn/docs/vela/lua/](https://docs.luoxe.cn/docs/vela/lua/)）

@@ -1,0 +1,24 @@
+---
+title: "Factory build.prop"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 221 字节  
+SHA-256 |  `3eef024dac2f19bc73db5374c01e3b30c6e4c43070834b12b3203f9afe1810f0`  
+使用阶段 | 工厂/产测镜像  
+  
+该文件与 AP `/etc/build.prop` 字节完全相同，包含系统版本、完整 customer version、矩形屏幕、手环类型、336 density 和 build id。
+
+## 为什么 Factory 需要完整属性
+Factory 环境会运行 `lc_factory` 等带 UI 和硬件测试的程序，因此仍需要：
+
+  * `ro.sf.lcd_density=336` 选择正确的界面缩放；
+  * 屏幕形状和产品类型决定测试 UI/项目；
+  * 完整 customer version 用于产线日志、版本追溯和放行记录。
+
+## 与 AP 相同不代表环境相同
+Factory 使用自己的可执行镜像、`rc.sysinit` 和 `rcS`。相同属性只保证产品身份一致，不会让 Factory 自动启动 AP 的 MiWear、NFC 或快应用服务。
+
+修改 Factory 版本属性可能让产测记录与实际 AP 版本不一致，进而导致工厂放行或售后诊断误判。

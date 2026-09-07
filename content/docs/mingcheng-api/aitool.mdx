@@ -1,0 +1,97 @@
+---
+title: AI 任务
+icon: Wrench
+description: 轮询方法的异步 AI 对话 / 工具调用任务
+---
+
+> 模块类型：service ｜ 基础路径：`/api/v2/aitool` ｜ 鉴权：设备 APIKey（**noQuota**）
+
+把 AI 上游的 SSE 流式响应转换成客户端可**轮询**的异步任务，兼容不支持长连接 / 事件流的设备，支持 function calling（工具调用）。
+
+<Callout type="info">
+全部端点使用设备 APIKey（请求体 / 查询 `Key`，路径含 `:appname`），且 **noQuota**——上游凭证由请求体自带，不消耗本网关配额。任务仅创建它的设备（同 appname + onlyId）可查询 / 取消。
+</Callout>
+
+---
+
+## 创建 AI 任务
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/aitool/tasks/:appname` |
+| **鉴权** | 设备 APIKey（noQuota） |
+
+**请求体：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `messages` | array | 是 | 1–100 项，每项 `{ "role": "system\|user\|assistant\|developer", "content": "非空字符串" }`；总字符 ≤100000 |
+| `baseUrl` | string | 是 | 上游 OpenAI 兼容供应商地址（不可指向内网） |
+| `apiKey` | string | 是 | 上游供应商密钥（请求体自带） |
+| `model` | string | 是 | 上游模型名 |
+| `temperature` / `top_p` / `max_tokens` / `presence_penalty` / `frequency_penalty` | number | 否 | 采样参数 |
+| `response_format` / `stop` | — | 否 | 输出格式 / 停止词 |
+| `tools` | array | 否 | 1–20 项，每项 `{ "type": "function", "function": { "name": "…（≤128）" } }` |
+| `tool_choice` | — | 否 | 工具调用策略 |
+| `velaPrompt` | bool | 否 | `true` 时注入 Vela 系统提示 |
+
+**成功 201** `result` 为任务对象（首帧 `status` 多为 `queued`），message「AI 任务已创建」。
+
+**错误：** 400 参数 / 消息格式错；413 内容 / 工具过长；429 任务队列满。
+
+---
+
+## 轮询任务
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/aitool/tasks/:appname/:taskId` |
+| **鉴权** | 设备 APIKey（noQuota） |
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `taskId` | path | 是 | 任务 ID |
+| `key` / `Key` | query | 是 | 设备 API Key |
+| `cursor` | query | 否 | 已收到的文本长度，默认 0（非负整数）；服务端返回此后的新增内容 |
+
+**成功 200 `result`（任务对象）：**
+
+```json
+{
+  "taskId": "...",
+  "status": "queued | running | completed | cancelled | failed",
+  "delta": "<自 cursor 起的新增文本>",
+  "cursor": 128,
+  "text": "<终态时的完整文本；运行中为 null>",
+  "toolCalls": [],
+  "finishReason": "stop | ... | null",
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0 },
+  "error": null,
+  "createdAt": "<ISO>",
+  "updatedAt": "<ISO>",
+  "expiresAt": "<ISO>",
+  "pollAfterMs": 750
+}
+```
+
+<Callout type="info">
+未完成时建议按 `pollAfterMs`（约 750ms）间隔再次轮询，并把返回的 `cursor` 作为下次请求的 `cursor`；终态时 `pollAfterMs` 为 0 且返回完整 `text`。
+</Callout>
+
+**错误：** 400 `cursor` 非法；404 任务不存在 / 已过期 / 非本设备。
+
+---
+
+## 取消任务
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/aitool/tasks/:appname/:taskId/cancel` |
+| **鉴权** | 设备 APIKey（noQuota） |
+
+无请求体要求。成功返回置为 `cancelled` 的任务对象，message「任务已取消」；已处于终态的任务直接返回当前状态。
+
+**错误：** 404 任务不存在 / 已过期 / 非本设备。

@@ -1,0 +1,49 @@
+---
+title: os（系统库）
+---
+
+## 概览
+
+`os` 提供与系统相关的一些函数，最常用的是**时间/日期**能力。
+在设备/沙箱环境中，涉及执行外部命令、文件操作等能力通常会被禁用或不存在。
+
+## 函数速查
+
+| 函数 | 说明 | 可用性 |
+|---|---|---|
+| `os.time([table])` | 获取/构造时间戳（秒） | `常见可用` |
+| `os.date([format[, time]])` | 格式化日期时间（或返回表） | `常见可用` |
+| `os.difftime(t2, t1)` | 时间差（秒） | `常见可用` |
+| `os.clock` | CPU 时间（实现相关） | `常见可用` |
+| `os.getenv(name)` | 读取环境变量 | `可能不可用（设备侧常被禁用）` |
+| `os.execute([command])` | 执行外部命令 | `可能不可用（设备侧常被禁用）` |
+| `os.exit([code[, close]])` | 退出进程 | `可能不可用（设备侧常被禁用）` |
+| `os.remove(filename)` | 删除文件 | `可能不可用（无文件系统/设备侧禁用）` |
+| `os.rename(old, new)` | 重命名文件 | `可能不可用（无文件系统/设备侧禁用）` |
+| `os.tmpname` | 生成临时文件名 | `可能不可用（无文件系统/设备侧禁用）` |
+| `os.setlocale(locale[, category])` | 设置本地化 | `可能不可用（设备侧常被禁用）` |
+
+## 示例：格式化当前时间（带保护）
+
+```lua
+if os and type(os.date) == "function" then
+  print(os.date("%Y-%m-%d %H:%M:%S"))
+else
+  print("os.date not available")
+end
+```
+
+## 设备侧建议
+
+- 如果项目已经有统一的数据订阅（例如 `dataman.subscribe("sys.time", ...)`），优先用它来驱动 UI，而不是直接依赖 `os.*`。
+- 对 `execute/remove/rename/tmpname` 等接口不要做强依赖：它们最容易被禁用或裁剪。
+
+### 社区补充（洛汐文档库）
+
+- 洛汐文档库确认 Vela 表盘宿主注册了 11 个 os 函数：`clock`、`date`、`difftime`、`execute`、`exit`、`getenv`、`remove`、`rename`、`setlocale`、`time`、`tmpname`。
+- **权限提示**：`os.execute` 是否允许启动任意命令，由 Lua 宿主和系统 shell 配置决定；不要据函数名推断第三方脚本一定有该权限。涉及外部命令与文件删改（`remove`/`rename`/`tmpname`）的能力，同样应先保护判断、再降级处理。
+
+## 参考来源：官方 docs-lua / 洛汐文档库
+
+- 官方 Lua 5.4 参考手册·标准库：[lua.org/manual/5.4/manual.html#6](https://www.lua.org/manual/5.4/manual.html#6)
+- 洛汐文档库《Lua 5.4 标准库》：[docs.luoxe.cn/docs/vela/lua/standard-library](https://docs.luoxe.cn/docs/vela/lua/standard-library/)

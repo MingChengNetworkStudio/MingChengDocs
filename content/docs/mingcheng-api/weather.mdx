@@ -1,0 +1,291 @@
+---
+title: 和风天气模块
+icon: Cloud
+description: 天气预报、预警、城市检索、生活指数、分钟级降水
+---
+
+import { CloudIcon, WarningIcon, MapPinIcon, SunIcon } from "@phosphor-icons/react/dist/ssr";
+
+> 模块类型：service ｜ 基础路径：`/api/v2/weather` ｜ 鉴权：设备 APIKey（均扣配额）
+
+<Callout type="warn">
+应用须在后台启用 `weather` 服务（否则 403）。
+</Callout>
+
+本模块作为和风天气（QWeather）的代理：用设备 APIKey 鉴权后，以应用所有者配置的和风凭证向上游请求，返回统一结构。
+
+<Callout type="info">
+通用请求体均含 `Key`（设备密钥）；坐标为经度 `longitude`（-180~180）、纬度 `latitude`（-90~90）。失败返回 `{ "status": <码>, "result": "<信息>" }`。
+</Callout>
+
+---
+
+## 获取天气预报
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/weather/getWeather/:appname` |
+| **说明** | 获取逐日 + 逐小时天气预报（上游始终取满 30 天，本地按 `days` 截取） |
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `Key` | body | 是 | 设备 API Key |
+| `longitude` | body | 是 | 经度 |
+| `latitude` | body | 是 | 纬度 |
+| `days` | body | 否 | 返回天数，1–30，默认 7 |
+| `lang` | body | 否 | 语言 |
+| `UTCoffset` | body | 否 | 时区偏移小时（-24~24），用于墙钟时间 |
+| `localTime` | body | 否 | `true` 时使用查询地本地时间（不叠加 `UTCoffset`） |
+
+**返回（逐日数组，每日）：**
+
+```json
+{
+  "status": 200,
+  "result": [
+    {
+      "Date": "2026-07-06",
+      "updateTime": "2026-07-06 19:55:43",
+      "sunrise": "03:54",
+      "sunset": "19:11",
+      "moonrise": "22:16",
+      "moonset": "10:06",
+      "moonPhase": "亏凸月",
+      "moonPhaseIcon": "805",
+      "tempMax": "27",
+      "tempMin": "18",
+      "iconDay": "300",
+      "textDay": "阵雨",
+      "iconNight": "305",
+      "textNight": "小雨",
+      "windDirDay": "东南风",
+      "windScaleDay": "5",
+      "windSpeedDay": "35",
+      "wind360Day": "135",
+      "windDirNight": "南风",
+      "humidity": "96",
+      "precip": "0.6",
+      "pressure": "943",
+      "vis": "10",
+      "uvIndex": "4",
+      "hourly": [
+        {
+          "hours": "19",
+          "temp": "21",
+          "icon": "501",
+          "text": "雾",
+          "wind360": "135",
+          "windDir": "东南风",
+          "windScale": "5",
+          "windSpeed": "35",
+          "windGust": "40",
+          "humidity": "85",
+          "pop": "0",
+          "precip": "0.0",
+          "pressure": "945",
+          "vis": "12",
+          "dew": "19",
+          "feelsLike": "17",
+          "cloud": "90",
+          "air": {
+            "code": "优",
+            "aqiDisplay": "25",
+            "level": "1",
+            "pollutants": [
+              { "name": "PM 2.5", "value": 8, "unit": "μg/m³" },
+              { "name": "PM 10", "value": 10, "unit": "μg/m³" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+<Callout type="info">
+`hourly` 第 0 项为**当前实况**（额外含 `uvIndex`）。空气质量上游失败时降级为 `air: null`。
+</Callout>
+
+**错误：** 400 参数不完整 / 坐标无效 / 未配置天气服务；401 Key 无效；403 未启用天气服务 / 设备封禁；502 上游失败。
+
+---
+
+## 获取天气预警
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/weather/getWarn/:appname` |
+| **说明** | 获取当前生效的天气预警（无预警返回 `[]`） |
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `Key` | body | 是 | 设备 API Key |
+| `longitude` | body | 是 | 经度 |
+| `latitude` | body | 是 | 纬度 |
+| `lang` | body | 否 | 语言 |
+| `UTCoffset` | body | 否 | 时区偏移小时 |
+| `localTime` | body | 否 | 使用查询地本地时间 |
+
+**返回（预警数组）：**
+
+```json
+{
+  "status": 200,
+  "result": [
+    {
+      "id": "...",
+      "senderName": "北京市气象台",
+      "issuedTime": "2025-06-07 10:00:00",
+      "title": "暴雨橙色预警",
+      "headline": "预计未来6小时...",
+      "eventType": "暴雨",
+      "eventCode": "...",
+      "severity": "Severe",
+      "urgency": "Immediate",
+      "certainty": "Likely",
+      "icon": "901",
+      "color": "orange",
+      "colorText": "橙色",
+      "effectiveTime": "...",
+      "onsetTime": "...",
+      "expireTime": "2025-06-07 18:00:00",
+      "description": "...",
+      "criteria": "...",
+      "instruction": "..."
+    }
+  ]
+}
+```
+
+---
+
+## 获取城市信息
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/weather/getCity/:appname` |
+| **说明** | 按城市名或坐标检索城市信息 |
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `Key` | body | 是 | 设备 API Key |
+| `location` | body | 是 | 城市名或坐标 |
+| `range` | body | 否 | 行政区 / 范围过滤（原样作为上游 `adm`） |
+| `number` | body | 否 | 返回数量，1–20 |
+| `lang` | body | 否 | 语言 |
+
+**返回（城市数组）：**
+
+```json
+{
+  "status": 200,
+  "result": [
+    {
+      "name": "北京",
+      "id": "101010100",
+      "lat": "39.90",
+      "lon": "116.41",
+      "adm2": "北京",
+      "adm1": "北京市",
+      "country": "中国",
+      "tz": "Asia/Shanghai",
+      "utcoffset": "+08:00",
+      "type": "city",
+      "rank": "10"
+    }
+  ]
+}
+```
+
+**错误：** 404 无搜索结果。
+
+---
+
+## 获取生活指数
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/weather/getIndices/:appname` |
+| **说明** | 获取天气生活指数预报 |
+
+<Callout type="info">
+新版 Eternal 已内置天气指数计算，无需请求此 API。
+</Callout>
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `Key` | body | 是 | 设备 API Key |
+| `longitude` | body | 是 | 经度 |
+| `latitude` | body | 是 | 纬度 |
+| `days` | body | 否 | `"1d"`（默认）或 `"3d"`；非法值按 `1d` |
+| `type` | body | 否 | 指数 ID（逗号分隔，`0` = 全部），原样透传 |
+| `lang` | body | 否 | 语言 |
+| `UTCoffset` | body | 否 | 时区偏移小时 |
+
+**返回（按日期分组）：**
+
+```json
+{
+  "status": 200,
+  "result": [
+    {
+      "Date": "2025-06-07",
+      "data": [
+        { "name": "运动指数", "level": "3", "category": "较不宜", "text": "天气较好，但考虑天气寒冷..." }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 获取分钟级降水
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `POST /api/v2/weather/getMinutely/:appname` |
+| **说明** | 获取分钟级降水预报（未来 2 小时逐 5 分钟） |
+
+<Callout type="warn">
+分钟级降水仅支持中华人民共和国境内。
+</Callout>
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `Key` | body | 是 | 设备 API Key |
+| `longitude` | body | 是 | 经度 |
+| `latitude` | body | 是 | 纬度 |
+| `lang` | body | 否 | 语言 |
+| `UTCoffset` | body | 否 | 时区偏移小时 |
+
+**返回：**
+
+```json
+{
+  "status": 200,
+  "result": {
+    "summary": "95 分钟后雨就停了",
+    "start": "2025-06-07 10:00",
+    "end": "2025-06-07 12:00",
+    "type": "rain",
+    "minutely": ["0.15", "0.23", "0.21", "0.17"]
+  }
+}
+```

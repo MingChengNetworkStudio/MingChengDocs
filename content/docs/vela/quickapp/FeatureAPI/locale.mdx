@@ -1,0 +1,122 @@
+---
+title: "locale 区域设置"
+---
+
+> 获取当前系统的语言与国家/地区设置。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `locale`（无 `system.` 前缀） |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "locale" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import locale from 'locale'
+// 本仓库运行时/测试中使用的写法
+const locale = require('locale')
+```
+
+（模块名没有 `system.` 前缀，`require('locale')` 原样书写。社区资料（洛汐文档库）记载部分运行时也支持 `require('@locale')` 的带 `@` 写法，并建议用 `@system.app` 的 `canIUse('@locale.get')` 做能力探测。）
+
+## 功能概述
+
+本 Feature 提供一个同步方法 `get`，用于读取设备当前的系统区域设置，返回语言（如 `zh`）和国家/地区（如 `CN`）。底层通过 libuv 扩展接口 `uv_getlocale` 读取系统属性 `persist.locale`（形如 `zh_CN`、`en_US`，以下划线 `_` 分隔语言与地区），拆分后返回；适用于应用做多语言/地区适配。
+
+社区资料（洛汐文档库）说明：`locale` 是底层区域设置 feature，与公开的 `system.configuration.getLocale` 功能接近，但在 Feature Framework 中是**独立模块**；新应用可优先使用公开接口 `@system.configuration`，本模块适合需要直接读取底层区域设置的场景。
+
+## API
+
+### locale.get
+
+获取当前系统语言与国家/地区。**同步方法**，直接返回 `Locale` 对象，无回调、无 Promise、无失败回调。
+
+**参数**
+
+无。
+
+**返回值（Locale）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| language | string | 语言代码，来自系统属性 `persist.locale` 中下划线前的部分，如 `zh`、`en` |
+| countryOrRegion | string | 国家/地区代码，来自系统属性 `persist.locale` 中下划线后的部分，如 `CN`、`US` |
+
+**失败处理**
+
+- JIDL 未定义失败回调。Native 实现中若读取系统属性失败（`uv_getlocale` 返回值 ≤ 0），仅打印错误日志，仍返回一个 `Locale` 对象（字段可能为空字符串），具体内容以系统属性配置为准。
+
+**示例**
+
+```js
+const locale = require('locale')
+
+const loc = locale.get
+console.log('language:', loc.language)       // 例如 'zh'
+console.log('countryOrRegion:', loc.countryOrRegion) // 例如 'CN'
+
+// 典型用法：按语言切换文案
+if (loc.language === 'zh') {
+  console.log('你好')
+} else {
+  console.log('Hello')
+}
+```
+
+社区资料（洛汐文档库）给出的能力探测与降级写法：
+
+```js
+import app from '@system.app'
+
+if (app.canIUse('@locale.get')) {
+  const locale = require('@locale')
+  const value = locale.get
+  console.log(value.language, value.countryOrRegion)
+} else {
+  // @locale 不可导入时，优先改用公开接口
+  import configuration from '@system.configuration'
+  const value = configuration.getLocale
+  console.log(value.language, value.countryOrRegion)
+}
+```
+
+## 注意事项
+
+- **同步调用**：`get` 为同步方法，直接返回 `Locale` 对象，不支持回调/Promise 风格。
+- **数据来源**：底层读取系统属性 `persist.locale`（通过 `uv_property_get`），格式为 `语言_地区`（如 `zh_CN`），Native 用 `_` 分割得到 `language` 与 `countryOrRegion`；语言与地区字段缓冲区最大长度为 10 字符。
+- 系统未配置该属性或属性格式不正确时，Native 仅记录错误日志，返回对象的字段可能为空字符串，具体行为以 Native 实现为准。
+- **与 `system.configuration` 的关系**（社区资料：洛汐文档库）：两者都返回 `{ language, countryOrRegion }`，底层均依赖 `uv_getlocale`；`@system.configuration` 是官方公开接口，`locale` 为独立的底层模块，导入名不带 `system.` 前缀。部分运行时使用不带 `@` 的旧式 require 名称（`require('locale')`），跨设备适配时建议先 `canIUse` 探测再降级到 `@system.configuration`。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

@@ -1,0 +1,87 @@
+---
+title: indev 输入设备
+description: 输入设备（指针/按键）模块
+---
+
+## 模块函数
+
+```lua
+lvgl.indev.get_act -> lv_indev | nil
+lvgl.indev.get_next(indev: lv_indev | nil) -> lv_indev | nil
+lvgl.indev.get_obj_act -> lv_obj | nil
+```
+
+## 实例方法
+
+```lua
+indev:get_type -> integer           -- 1 = pointer 类型
+indev:get_point -> integer          -- 无交互时返回 0
+indev:get_vect -> integer
+indev:get_key -> integer
+indev:get_scroll_dir -> integer
+indev:get_gesture_dir -> integer
+indev:get_scroll_obj -> lv_obj | nil
+
+indev:reset -> nil
+indev:reset_long_press -> nil
+indev:wait_release -> nil
+
+indev:set_group(group: lv_group) -> nil
+indev:set_cursor(obj: lv_obj) -> nil
+
+indev:on_event(event: integer, cb: function) -> nil
+```
+
+## 示例
+
+```lua
+-- 遍历所有输入设备
+local id = lvgl.indev.get_next
+while id do
+  print("type:", id:get_type)
+  print("point:", id:get_point)
+  id = lvgl.indev.get_next(id)
+end
+
+-- 获取当前活跃输入设备正在操作的对象
+local obj = lvgl.indev.get_obj_act
+if obj then
+  print("active object found")
+end
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+> 以下内容来自洛汐文档库《LVGL 辅助模块》：[docs.luoxe.cn/docs/vela/lua/lvgl-modules](https://docs.luoxe.cn/docs/vela/lua/lvgl-modules/)
+
+模块函数：
+
+```lua
+lvgl.indev.get_act
+lvgl.indev.get_next([indev])
+lvgl.indev.get_obj_act
+```
+
+输入设备对象提供：
+
+| 方法 | 说明 |
+| --- | --- |
+| `get_type` | 输入设备类型 |
+| `reset` | 重置输入状态 |
+| `reset_long_press` | 清除长按状态 |
+| `set_cursor` | 设置指针光标对象 |
+| `set_group` | 绑定 Group |
+| `get_point` | 当前触点坐标 |
+| `get_gesture_dir` | 当前手势方向 |
+| `get_key` | 当前按键值 |
+| `get_scroll_dir` | 滚动方向 |
+| `get_scroll_obj` | 当前滚动对象 |
+| `get_vect` | 输入移动向量 |
+| `wait_release` | 等待松开 |
+| `on_event` | 注册输入设备事件 |
+
+返回坐标或向量时，宿主可能返回 table 或多个数值。调用方可先打印返回值形态，再做兼容封装。
+
+参考来源：官方 docs-lua / 洛汐文档库

@@ -1,0 +1,368 @@
+---
+title: "system.exchange 数据交换"
+---
+
+> 基于系统属性服务的跨应用键值（key-value）数据交换能力，可在应用间共享小容量字符串数据，数据持久化保存。社区资料（洛汐文档库）：与 `system.storage` 的应用私有数据库不同，本模块底层使用系统 property/exchange 服务，是**跨作用域字符串键值交换**能力。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.exchange` |
+| Feature 类型 | 标准 Feature（C++ 实现版本，回调风格；另有 Rust 实现版本，见文末[Rust 实现版本](#rust-实现版本)一节） |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.exchange" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import exchange from '@system.exchange'
+// 本仓库运行时/测试中使用的写法
+const exchange = require('system.exchange')
+```
+
+## 功能概述
+
+`system.exchange` 提供四个键值操作方法：`set`（写入）、`get`（读取）、`remove`（删除）、`clear`（清空）。Native 实现通过 libuv 工作线程调用系统属性服务（`uv_property_set` / `uv_property_get` / `uv_property_delete`，底层为 NuttX 系统属性），所有键统一加 `persist.` 前缀写入，**最终键名为 `persist.<scope>.<key>`**，数据由属性服务持久化存储，可被其他应用按约定 scope 读取，从而实现应用间数据交换/分享。所有方法均为**回调风格**（success/fail/complete），JIDL 未定义 Promise 返回。
+
+社区资料（洛汐文档库）：底层会给 key 加作用域前缀，因此同名 key 在不同 scope 下不是同一条记录；固件会拒绝不支持的 scope、超长 key/value，以及 scope 与 `package`/`sign` 的非法组合。
+
+## API
+
+### exchange.set(info)
+
+写入一个键值数据。异步模型：**回调风格**（JIDL 定义为 `void set(SetInfo info)`），同步返回 `void`，不支持 Promise。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | — | 数据键名，非空字符串；最终存储键为 `persist.<scope>.<key>` |
+| value | string | 是 | — | 数据值，非空字符串，长度需小于系统属性值上限（PROPERTY_VALUE_MAX，本系统为 255） |
+| scope | string | 否 | `"global"` | 作用域，见下文"数据结构"一节的 scope 取值说明 |
+| success | function | 否 | — | 成功回调，签名为 `(value: string)`，调用时传入字符串 `"success"`。社区资料：success 的字符串参数由底层 property 回调产生，业务代码通常不需要解析它 |
+| fail | function | 否 | — | 失败回调，签名为 `(errorMsg: string, code: number)` |
+| complete | function | 否 | — | 完成回调（成功失败都会触发），签名为 `(msg: string)`，成功传 `"success"`、失败传 `"fail"` |
+
+> 社区资料（洛汐文档库）：固件实现中 `set` 还存在 `package`、`sign` 两个扩展字段（`application` scope 时必填），但上游 JIDL 没有公开它们，openvela 实证 JS 接口未暴露这两个参数。
+
+**成功回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 固定为字符串 `"success"` |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`。
+- 所有失败场景错误码均为 **202**，常见错误信息：
+
+| code | 错误信息 errorMsg | 触发场景 |
+| ---- | ---- | ---- |
+| 202 | `"param is invalid"` | 参数校验失败：key 为空、value 为空或超长、scope 不支持、最终键长超过系统属性键上限（PROPERTY_KEY_MAX，本系统为 127） |
+| 202 | `"exchange malloc fail"` | Native 内存分配失败 |
+| 202 | `"uv_property_set fail"` | 系统属性服务写入失败 |
+| 202 | `"fail"` | 属性服务异步执行返回失败 |
+
+**示例**
+
+```js
+const exchange = require('system.exchange')
+
+exchange.set({
+  key: 'shared_token',
+  value: 'abc123456',
+  scope: 'global',
+  success: function (value) {
+    console.log('写入成功：', value) // success
+  },
+  fail: function (errorMsg, code) {
+    console.log('写入失败：', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('完成：', msg) // success / fail
+  }
+})
+```
+
+### exchange.get(info)
+
+读取一个键值数据。异步模型：**回调风格**（JIDL 定义为 `void get(GetInfo info)`），同步返回 `void`，不支持 Promise。成功回调接收 `{ value: string }`（参数同 `set` 但不需要 `value` 字段）。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | — | 数据键名，非空字符串 |
+| scope | string | 否 | `"global"` | 作用域，见下文"数据结构"一节的 scope 取值说明 |
+| success | function | 否 | — | 成功回调，签名为 `(info: GetRet)`，`GetRet = { value: string }`；键不存在时 value 为空字符串（具体行为以 Native/属性服务实现为准） |
+| fail | function | 否 | — | 失败回调，签名为 `(errorMsg: string, code: number)` |
+| complete | function | 否 | — | 完成回调，签名为 `(msg: string)`，成功传 `"success"`、失败传 `"fail"` |
+
+**成功回调参数（GetRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 读到的数据值；属性不存在时为空字符串 `""` |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`，错误码均为 **202**，常见错误信息：`"param is invalid"`（key 为空、scope 不支持、键超长等）、`"exchange malloc fail"`、`"uv_property_get failed"`、`"fail"`。
+
+**示例**
+
+```js
+const exchange = require('system.exchange')
+
+exchange.get({
+  key: 'shared_token',
+  scope: 'global',
+  success: function (ret) {
+    console.log('读取到的值：', ret.value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('读取失败：', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('完成：', msg)
+  }
+})
+```
+
+写入后回读示例（社区资料：洛汐文档库）：
+
+```js
+exchange.set({
+  key: 'demo-key',
+  value: 'demo-value',
+  scope: 'global',
+  success:  => exchange.get({
+    key: 'demo-key',
+    scope: 'global',
+    success: res => console.log(res.value)
+  })
+})
+```
+
+### exchange.remove(info)
+
+删除一个键值数据。异步模型：**回调风格**（JIDL 定义为 `void remove(RemoveInfo info)`），同步返回 `void`，不支持 Promise。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | — | 要删除的数据键名，非空字符串 |
+| scope | string | 否 | `"global"` | 作用域，见下方 [scope 取值](#数据结构) |
+| success | function | 否 | — | 成功回调，签名为 `(value: string)`，调用时传入字符串 `"success"` |
+| fail | function | 否 | — | 失败回调，签名为 `(errorMsg: string, code: number)` |
+| complete | function | 否 | — | 完成回调，签名为 `(msg: string)` |
+
+**成功回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 固定为字符串 `"success"` |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`，错误码均为 **202**，常见错误信息：`"param is invalid"`、`"exchange malloc fail"`、`"uv_property_delete failed"`、`"fail"`。
+
+**示例**
+
+```js
+const exchange = require('system.exchange')
+
+exchange.remove({
+  key: 'shared_token',
+  scope: 'global',
+  success: function (value) {
+    console.log('删除成功：', value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('删除失败：', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('完成：', msg)
+  }
+})
+```
+
+### exchange.clear(info)
+
+清空指定作用域的数据。异步模型：**回调风格**（JIDL 定义为 `void clear(ClearInfo info)`），同步返回 `void`，不支持 Promise。
+
+> **当前 Native 实现未实际执行清空操作**：源码注释明确说明 "Exchange clear operation only clear current application space data, not support yet"，实现中不调用属性服务，直接回调 success。调用该方法只会收到成功回调，不会删除任何数据。具体行为以 Native 实现为准。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| scope | string | 否 | `"global"` | 作用域，见下文"数据结构"一节的 scope 取值说明（参数校验逻辑与其他方法一致，非法 scope 仍会 fail） |
+| success | function | 否 | — | 成功回调，签名为 `(value: string)`，调用时传入字符串 `"success"` |
+| fail | function | 否 | — | 失败回调，签名为 `(errorMsg: string, code: number)` |
+| complete | function | 否 | — | 完成回调，签名为 `(msg: string)` |
+
+**成功回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 固定为字符串 `"success"`（注意：当前实现为空操作） |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`，错误码均为 **202**，常见错误信息：`"param is invalid"`（scope 非法等）、`"exchange malloc fail"`。
+
+**示例**
+
+```js
+const exchange = require('system.exchange')
+
+exchange.clear({
+  scope: 'global',
+  success: function (value) {
+    console.log('clear 回调成功：', value)
+    // 注意：当前实现为占位空操作，数据并未被实际清除
+  },
+  fail: function (errorMsg, code) {
+    console.log('clear 失败：', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('完成：', msg)
+  }
+})
+```
+
+## 数据结构
+
+### scope 取值
+
+| scope 值 | 说明 |
+| ---- | ---- |
+| `"global"` | **默认值**。全局交换域/全局共享作用域，任何应用均可读写，最终键名为 `persist.global.<key>`；不能同时提供 `package`、`sign`（社区资料：洛汐文档库） |
+| `"vendor"` | 厂商域/厂商作用域，最终键名为 `persist.vendor.<key>`；该作用域不允许携带 package/sign（JS 接口也未暴露） |
+| `"application"` | 指定应用域/应用私有作用域。**注意**：Native 校验要求该作用域必须同时提供目标 `package` 与应用签名（`sign`，SHA-256），而当前 JS/JIDL 接口未暴露这两个参数，因此传 `"application"` 会判定参数非法并 fail（`"param is invalid"`，code 202），实际不可用 |
+| 其他字符串 | 不支持，参数校验失败，fail 回调 code 202 |
+
+> 社区资料（洛汐文档库）：`package`、`sign` 是目标固件实现中存在的扩展字段，上游 JIDL 没有公开它们；固件证明这两个字段必须同时提供，但没有证明 `sign` 需要证书摘要、别名还是厂商内部 token——除非掌握目标系统协议，否则不要猜测其格式。application scope 探测模板：
+>
+> ```js
+> exchange.get({
+>   key: 'shared-key',
+>   scope: 'application',
+>   package: '目标应用包名',
+>   sign: '目标应用签名标识',
+>   success: ({ value }) => console.log(value),
+>   fail: (message, code) => console.error(code, message)
+> })
+> ```
+
+### GetRet
+
+`get` 方法 success 回调的参数对象。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | string | 读取到的数据值；键不存在时为空字符串 `""` |
+
+### SetInfo / GetInfo / RemoveInfo / ClearInfo
+
+四个方法的入参结构，字段分别在各方法小节列出：均包含 `scope`（默认 `"global"`）与 `success`/`fail`/`complete` 三个回调；除 `clear` 外均包含必填的 `key`；`set` 额外包含必填的 `value`。
+
+## Promise 风格封装（社区资料：洛汐文档库）
+
+C++ 版四个方法均为回调风格，业务代码可自行封装为 Promise：
+
+```js
+function getExchange(key, scope = 'global') {
+  return new Promise((resolve, reject) => {
+    exchange.get({
+      key,
+      scope,
+      success: ({ value }) => resolve(value),
+      fail: (message, code) => reject({ message, code })
+    })
+  })
+}
+
+function removeExchange(key, scope = 'global') {
+  return new Promise((resolve, reject) => {
+    exchange.remove({
+      key,
+      scope,
+      success: resolve,
+      fail: (message, code) => reject({ message, code })
+    })
+  })
+}
+
+function clearExchange(scope = 'global') {
+  return new Promise((resolve, reject) => {
+    exchange.clear({
+      scope,
+      success: resolve,
+      fail: (message, code) => reject({ message, code })
+    })
+  })
+}
+```
+
+> 若固件启用的是 Rust 实现版本（见下节），四个方法原生返回 Promise，无需此封装。
+
+## Rust 实现版本
+
+> `system.exchange` 同时存在一个 **Rust 实现版本（Promise 风格）**，与本文的 C++ 版本模块名相同、互斥共存。完整文档见同目录 `system.exchange.rust`，本节仅做简要说明。
+
+| 对比项 | C++ 版本（本文） | Rust 版本 |
+| ---- | ---- | ---- |
+| 构建开关（Kconfig choice 二选一） | `CONFIG_FEATURE_SYSTEM_EXCHANGE`（依赖 `LIBUV_EXTENSION && KVDB`） | `CONFIG_RUST_FEATURE_SYSTEM_EXCHANGE`（依赖 `KVDB && CONFIG_FEATURE_RUST_MODULES`） |
+| JIDL | `modules/jidl/exchange.jidl` | `rust/modules/system_exchange/jidl/system_exchange.jidl` |
+| 异步风格 | 回调风格（success/fail/complete），不支持 Promise | **Promise 风格**，不接受回调参数 |
+| 作用域 | `global`（默认）/ `vendor`；`application` 因缺 package/sign 不可用 | 仅 `global`（默认）/ `vendor` |
+| resolve 值 | `set`/`remove`/`clear` 回调收 `"success"`；`get` 回调收 `{ value }` | `set` resolve 写入的 value 字符串本身；`get` resolve `{ value }`；`remove`/`clear` resolve `"success"` |
+| 错误码 | 全部 202（`"param is invalid"`、`"exchange malloc fail"`、`"uv_property_* fail"`、`"fail"`） | 全部 202（`info is none`、`key is null or empty`、`invalid value`、`scope <scope> not support`、`key length too long, max:127`、`set/get/remove failed: <e>` 等） |
+| clear 行为 | 空操作，仅回调成功 | 仅校验 scope 后 resolve `"success"`，不实际遍历删除 |
+
+两个版本的键命名一致（均映射为系统属性 `persist.{scope}.{key}`，键长上限 127 字节、value 上限 255 字节），数据互通；JS 侧 `require('system.exchange')` 拿到的是哪个实现取决于固件 Kconfig 配置，迁移代码时需注意回调/Promise 风格差异。
+
+## 注意事项
+
+- **权限**：不需要申请运行时权限。
+- **数据本质**：数据写入系统属性服务的 `persist.` 命名空间（`persist.<scope>.<key>`），具有持久化特性（重启后仍在，由属性服务保证），适合应用间交换**小容量字符串**；不能存储二进制或超长文本。社区资料（洛汐文档库）：固件会检查 key 和 value 长度，不要把它用于大块数据。
+- **长度限制**：value 长度必须小于 PROPERTY_VALUE_MAX（本系统为 **255**，即最长 254 字符）；加上 `persist.`、scope 前缀后的完整键长不得超过 PROPERTY_KEY_MAX（本系统为 **127**），超限均返回 code 202 `"param is invalid"`。
+- **仅字符串**：key/value 均为字符串，不支持 number/object 等类型。社区资料：对象需要 `JSON.stringify` 后写入，读取后用 `JSON.parse` 还原，并处理旧版本/损坏数据。
+- **敏感数据（社区资料：洛汐文档库）**：敏感 token 不应明文放入全局交换域（`global` 作用域任何应用均可读）。
+- **回调为一次性**：success/fail/complete 回调触发后即被 Native 移除，不会重复调用；complete 在 success 或 fail 之后必定触发。
+- **scope 选择**：应用间共享数据使用默认的 `"global"`（或 `"vendor"`）；`"application"` 作用域因 JS 接口缺少 package/sign 参数当前不可用。
+- **clear 为空操作且影响面大**：如上文所述，`clear` 在当前 Native 实现中不删除任何数据，仅回调成功；需要删除数据请按 key 调用 `remove`。社区资料（洛汐文档库）：即便未来 `clear` 生效，它也会影响整个指定作用域——`global` 或 `vendor` 可能由多个组件共享，不要用它代替逐 key 清理。
+- **异步执行**：属性操作在 libuv 工作线程中执行，不阻塞 JS 线程；操作失败（如属性服务异常）统一通过 fail 回调返回 code 202。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

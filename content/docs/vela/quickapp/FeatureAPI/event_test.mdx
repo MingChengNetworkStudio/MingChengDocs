@@ -1,0 +1,253 @@
+---
+title: "event_test 事件测试"
+---
+
+> **测试 Feature**，仅用于验证 Feature Framework 的事件（event）订阅/派发、接口（interface）对象、属性（property）与继承机制，不提供实际业务能力，应用请勿依赖。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `event_test` |
+| Feature 类型 | **测试 Feature**（test/event_test，仅用于测试） |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 本仓库运行时/测试中使用的写法（模块名没有 system. 前缀，原样书写）
+const test = require('event_test')
+```
+
+## 功能概述
+
+该 Feature 是 Feature Framework 事件机制的测试桩：模块本身提供两个事件（`data_changed`、`state_changed`）和一个手动触发事件的方法 `invoke_event`；同时通过三个带 `[ctor="true"]` 的工厂方法创建接口对象——`createDog`（Animal）、`createPigeon`（Bird）、`createCock`（Chicken，继承 Animal 和 Bird），用于验证接口属性读写、接口事件、接口方法、多接口继承等能力。Native 实现的事件载荷均为硬编码测试值（如 `"hello world"`、`50`、`80`、`60`、`500`、`2` 等），仅在存在 JS 监听者时才真正派发。
+
+## 事件订阅方式（通用）
+
+模块对象和接口对象都支持以下两种事件订阅写法（测试用例 `tests/jidl/event_test.js` 已覆盖）：
+
+```js
+const test = require('event_test')
+
+// 写法一：属性赋值，值可以是单个函数，也可以是函数数组（多个监听者）
+test.data_changed = function (data) { console.log('data:', data) }
+test.state_changed = [fn1, fn2]
+test.data_changed = null        // 置 null 取消订阅
+
+// 写法二：on / off
+test.on('data_changed', function (data) { console.log(data) })
+test.on('state_changed', [fn1, fn2])
+test.off('state_changed', fn1)
+test.off('data_changed', null)  // off 传 null 可清空该事件全部监听者
+```
+
+## API
+
+### test.invoke_event(event_name)
+
+手动触发模块级事件（或 dog 接口的 `weight_changed` 事件），用于测试事件派发链路。**同步方法**，无返回值。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| event_name | string | 是 | 无 | 事件名 |
+
+**实现中识别的事件名与派发载荷**
+
+| event_name | 派发目标 | 监听回调收到的参数 | 备注 |
+| ---- | ---- | ---- | ---- |
+| `"data_changed"` | 模块事件 `data_changed` | `"hello world"`（string） | 仅在该事件有 JS 监听者时派发 |
+| `"state_changed"` | 模块事件 `state_changed` | `50`（int） | 仅在该事件有 JS 监听者时派发 |
+| `"weight_changed"` | 最近一次 `createDog` 创建的 dog 接口 | `80`（int） | 未创建过 dog 时无动作 |
+| 其它事件名 | — | — | 无任何动作 |
+
+**示例**
+
+```js
+const test = require('event_test')
+
+test.data_changed = function (data) {
+  console.log('data_changed 收到：', data) // 输出：hello world
+}
+test.state_changed = function (status) {
+  console.log('state_changed 收到：', status) // 输出：50
+}
+
+test.invoke_event('data_changed')
+test.invoke_event('state_changed')
+```
+
+### test.createDog(type)
+
+创建一个 **Animal** 接口对象（实现 target 为 `dog`）。**同步方法**，返回接口对象。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | number | 是 | 无 | 类型参数，当前实现中未实际使用（仅透传/打印） |
+
+**返回值**：Animal 接口对象，包含：
+
+| 成员 | 种类 | 说明 |
+| ---- | ---- | ---- |
+| `name` | property（string，可读写） | 读取固定返回 `"dog name is: tommy"`；赋值仅打印日志，不影响读取结果 |
+| `weight_changed` | event（int 参数） | 体重变化事件，通过模块方法 `test.invoke_event('weight_changed')` 触发，回调收到 `80` |
+
+**示例**
+
+```js
+const test = require('event_test')
+
+const dog = test.createDog(1)
+
+console.log(dog.name) // "dog name is: tommy"
+dog.name = 'spike'    // 仅 Native 打印日志，name 读取值不变
+
+dog.weight_changed = function (weight) {
+  console.log('dog weight:', weight) // 输出：80
+}
+test.invoke_event('weight_changed')
+```
+
+### test.createPigeon
+
+创建一个 **Bird** 接口对象（实现 target 为 `pigeon`）。**同步方法**，无参数，返回接口对象。
+
+**返回值**：Bird 接口对象，包含：
+
+| 成员 | 种类 | 说明 |
+| ---- | ---- | ---- |
+| `fly` | 方法 | 无参数、无返回值；Native 仅打印日志（`pigeon is flying`） |
+| `ascended` | event（int 参数） | 升空高度事件；**当前 Native 实现中没有派发该事件的路径**（订阅后不会收到回调） |
+
+**示例**
+
+```js
+const test = require('event_test')
+
+const pigeon = test.createPigeon
+
+pigeon.ascended = function (height) {
+  console.log('pigeon height:', height)
+}
+pigeon.fly // 仅打印日志
+```
+
+### test.createCock
+
+创建一个 **Chicken** 接口对象（实现 target 为 `cock`）。Chicken 同时继承 Animal 和 Bird。**同步方法**，无参数，返回接口对象。
+
+**返回值**：Chicken 接口对象，包含：
+
+| 成员 | 种类 | 来源 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `name` | property（string，可读写） | Animal | 读取固定返回 `"cock name is: wowo"`；赋值仅打印日志 |
+| `weight` | property（int，**只读**） | Chicken | 读取固定返回 `30` |
+| `fly` | 方法 | Bird | 无参数、无返回值；Native 打印日志（`cock cannot fly`） |
+| `invoke(event_name)` | 方法 | Chicken | 手动触发该接口对象上的事件，见下表 |
+| `weight_changed` | event（int 参数） | Animal | 体重变化事件 |
+| `ascended` | event（int 参数） | Bird | 升空高度事件 |
+| `egg_layed` | event（int 参数） | Chicken | 下蛋事件 |
+
+**`cock.invoke(event_name)` 识别的事件与派发载荷**
+
+| event_name | 回调收到的参数 | 备注 |
+| ---- | ---- | ---- |
+| `"weight_changed"` | `60`（int） | 事件 id 无效或无监听者时不派发 |
+| `"ascended"` | `500`（int） | 同上 |
+| `"egg_layed"` | `2`（int） | 同上 |
+
+> 实现先校验事件 id（`id <= 0` 打印错误并返回）与监听者数量（`cb_count <= 0` 直接返回），仅当事件有效且存在 JS 监听者时才派发。
+
+**示例**
+
+```js
+const test = require('event_test')
+
+const cock = test.createCock
+
+console.log(cock.name)   // "cock name is: wowo"
+console.log(cock.weight) // 30（只读属性）
+cock.fly               // 打印 "cock cannot fly"
+
+cock.weight_changed = function (weight) {
+  console.log('cock weight:', weight) // 60
+}
+cock.on('ascended', function (height) {
+  console.log('cock ascended:', height) // 500
+})
+cock.egg_layed = function (count) {
+  console.log('egg layed:', count) // 2
+}
+
+cock.invoke('weight_changed')
+cock.invoke('ascended')
+cock.invoke('egg_layed')
+```
+
+## 数据结构
+
+### 接口继承关系（JIDL 定义）
+
+```
+interface Animal        { property string name; event weight_changed(int weight); }
+interface Bird          { void fly; event ascended(int height); }
+interface Chicken extends Animal, Bird {
+    property int weight readonly;
+    event egg_layed(int count);
+    void invoke(string event_name);
+}
+```
+
+工厂方法与接口的对应关系：
+
+| 工厂方法 | 返回接口 | target | 备注 |
+| ---- | ---- | ---- | ---- |
+| `createDog(int type)` | Animal | `dog` | type 参数未使用 |
+| `createPigeon` | Bird | `pigeon` | `ascended` 事件无派发路径 |
+| `createCock` | Chicken（继承 Animal、Bird） | `cock` | 含只读属性 `weight` 与方法 `invoke` |
+
+## 模块事件一览
+
+| 事件 | 参数类型 | 触发方式 | 载荷 |
+| ---- | ---- | ---- | ---- |
+| `data_changed` | string | `test.invoke_event('data_changed')` | `"hello world"` |
+| `state_changed` | int | `test.invoke_event('state_changed')` | `50` |
+
+## 注意事项
+
+- **测试 Feature**：本模块仅用于 Feature Framework 的事件/接口/属性/继承机制测试，所有返回值与事件载荷均为硬编码桩数据，不代表真实业务含义，应用代码不应依赖。
+- **事件按需派发**：Native 在派发前会检查该事件是否存在 JS 监听者（回调计数），无监听者时不派发；接口事件还会校验事件 id 有效性。
+- **属性为桩实现**：`dog.name` / `cock.name` 的 setter 只打印日志、不保存值，getter 永远返回固定字符串；`cock.weight` 为只读属性，固定返回 `30`。
+- **dog 接口句柄共享**：`invoke_event('weight_changed')` 作用于"最近一次 `createDog` 创建的对象"（Native 只保存一个 dog 接口句柄）。
+- **pigeon 的 `ascended` 事件**在当前实现中没有任何触发路径；如需验证 `ascended` 事件，使用 `cock.invoke('ascended')`（载荷 500）。
+- 事件订阅支持属性赋值（单函数/函数数组/null）与 `on`/`off` 两种写法，模块对象与接口对象均支持。
+
+## 机型支持明细
+<Callout type="warn">
+下列设备支持情况仅供参考,仅使用canUse探测
+</Callout>
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

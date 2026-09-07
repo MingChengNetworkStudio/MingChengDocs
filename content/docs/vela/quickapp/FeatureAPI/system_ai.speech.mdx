@@ -1,0 +1,315 @@
+---
+title: "system.ai.speech AI 语音识别（ASR）"
+---
+
+> 提供在线语音识别（Automatic Speech Recognition）能力：创建识别会话后开始录音，引擎以流式方式回调识别文本（可带翻译结果），支持正常结束与取消。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.ai.speech` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（语音服务鉴权通过 `auth.config` 传入） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import speech from '@system.ai.speech'
+// 本仓库运行时/测试中使用的写法
+const speech = require('system.ai.speech')
+```
+
+## 功能概述
+
+该 Feature 通过工厂方法 `createAsr` 创建一个 `SpeechRecognition` 语音识别接口对象，底层调用系统 ASR 引擎接口（`ai_asr_create_engine_with_auth` / `ai_asr_start` / `ai_asr_finish` / `ai_asr_cancel`，引擎版本 1，绑定运行时 libuv 事件循环）完成录音与在线识别。识别结果通过接口事件流式回调：`onMessage` 携带识别文本（`text`）、句子结束标记（`reformation`）与可选的翻译结果数组（`translations`）；识别正常完成触发 `onFinished`；引擎或网络异常触发 `onError`。目前支持火山引擎（`volcengine`）与阿里云（`aliyun`）两种引擎类型，鉴权参数通过 `auth.config`（JSON 对象）传入；包名以 `com.vela.system` 开头的系统应用走白名单，可跳过鉴权配置校验。
+
+**典型调用流程**：
+
+1. `speech.createAsr({ auth, config })` 创建识别对象（参数非法时抛异常或返回 `null`）；
+2. 在对象上订阅 `onMessage` / `onError` / `onFinished` 事件（支持属性赋值或 `on`/`off`）；
+3. 调用 `start` 开始录音识别，`onMessage` 持续收到流式结果；
+4. 调用 `finish` 表示说完（停止录音、等待引擎返回最终结果），引擎完成后回调 `onFinished`；中途放弃可调用 `cancel`；
+5. 识别对象被回收时 Native 会自动 `finish` 并关闭引擎。
+
+## API
+
+### speech.createAsr(para)
+
+创建语音识别会话，返回 `SpeechRecognition` 接口对象。**同步工厂方法**（JIDL `[ctor="true", target="Asr"]`）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| auth | object（`Auth`） | 是 | 无 | 引擎鉴权信息，必须包含 `config` |
+| config | object（`AsrConfig`） | 否 | null | 识别配置（静音超时、语言、翻译目标语言） |
+
+**返回值**：`SpeechRecognition` 接口对象；创建失败时返回 `null`，参数非法时直接抛出 JS 异常。
+
+**创建失败/异常条件（以 Native 实现为准）**
+
+| 条件 | 行为 |
+| ---- | ---- |
+| `para` 为 null | 抛出异常：`"param error"` |
+| `auth` 或 `auth.config` 为 null | 抛出异常：`"auth error"` |
+| `config.endVadTime < 0` | 返回 `null`（日志 `endVadTime is invalid`） |
+| `config.lang` 不在 `"auto"` / `"zh"` / `"en"` / `"ja"` 中 | 返回 `null`（日志 `lang is invalid`） |
+| `auth.type` 不在 `"volcengine"` / `"aliyun"` 中 | 返回 `null`（日志 `engine_type is invalid`） |
+| `auth.config` 不是合法 JSON，或缺少鉴权字段 | 返回 `null`（日志 `parse config json failed` 等） |
+| 底层引擎创建失败 | 返回 `null`（日志 `create asr failed` / `ai_asr_create_engine_with_auth failed`） |
+
+**鉴权配置 `auth.config` 字段要求**（非白名单应用）：
+
+| 引擎类型（`auth.type`） | `auth.config` 必含字符串字段 |
+| ---- | ---- |
+| `"volcengine"`（默认） | `accessKey`、`appKey`、`model` |
+| `"aliyun"` | `apiKey`、`model` |
+
+> 包名以 `com.vela.system` 开头的系统应用命中白名单，Native 跳过 `auth.config` 鉴权字段校验，直接创建引擎。
+
+**示例**
+
+```js
+const speech = require('system.ai.speech')
+
+const asr = speech.createAsr({
+  auth: {
+    type: 'volcengine', // 默认值，可省略；还支持 'aliyun'
+    config: {
+      accessKey: 'your-access-key',
+      appKey: 'your-app-key',
+      model: 'your-model-name'
+    }
+  },
+  config: {
+    endVadTime: 1000,        // 静音判定超时（毫秒），默认 1000
+    lang: 'auto',            // 识别语言：auto/zh/en/ja，默认 auto
+    translations: ['en']     // 翻译目标语言数组，默认 null（不翻译）
+  }
+})
+
+if (!asr) {
+  console.log('ASR 引擎创建失败')
+}
+```
+
+### asr.start
+
+开始录音并启动语音识别。**同步方法**，无参数、无返回值；结果通过事件回调。
+
+**示例**
+
+```js
+asr.onMessage = function (res) {
+  console.log('识别文本：', res.text)
+  if (res.reformation) {
+    console.log('（本句结束）')
+  }
+  if (res.translations) {
+    res.translations.forEach(function (t) {
+      console.log('翻译[' + t.lang + ']：', t.text)
+    })
+  }
+}
+
+asr.onError = function (data, code) {
+  console.log('识别出错', code, data)
+}
+
+asr.onFinished = function  {
+  console.log('识别已完成')
+}
+
+asr.start
+```
+
+### asr.finish
+
+主动结束录音：通知引擎不再有音频输入，等待引擎返回最终识别结果，引擎处理完成后回调 `onFinished` 事件。**同步方法**，无参数、无返回值。
+
+**示例**
+
+```js
+// 用户松开录音按钮、或检测到说话结束时调用
+asr.finish
+```
+
+### asr.cancel
+
+取消本次识别：放弃录音与识别流程，不产生 `onFinished` 回调（引擎的 cancel/closed 事件仅在 Native 打日志，不派发到 JS）。**同步方法**，无参数、无返回值。
+
+**示例**
+
+```js
+// 用户放弃本次语音输入
+asr.cancel
+```
+
+## 接口事件
+
+事件可通过属性赋值（`asr.onMessage = fn`，也支持函数数组与置 `null`）或 `asr.on('onMessage', fn)` / `asr.off('onMessage', fn)` 订阅。
+
+### onMessage(res)
+
+识别结果事件，识别过程中流式回调（同一 event 在一次会话中可能触发多次）。
+
+| 参数 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| res | object（`AsrResult`） | 识别结果，见下方数据结构 |
+
+- `res.text`：当前识别文本（string）。
+- `res.reformation`：句子结束标记（number），来自引擎结果的 `sentence_end` 字段——非 0 表示当前文本为一句话的最终结果，0 表示中间（partial）结果。
+- `res.translations`：翻译结果数组（`AsrTranslationResult[]`），仅在引擎返回翻译时存在，每项含 `text`（译文）与 `lang`（目标语言）；无翻译时该字段为空。
+
+### onError(data, code)
+
+识别错误事件。
+
+| 参数 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | string | 错误信息 |
+| code | number | 错误码 |
+
+Native 错误码映射（引擎错误码 → JS 错误码）：
+
+| code | data | 触发场景 |
+| ---- | ---- | ---- |
+| 200 | `"unknown error"` | 未知错误（引擎错误码无法识别时的兜底） |
+| 10006 | `"engine internal error"` | 引擎内部错误：识别失败、录音/媒体错误（含录音焦点丢失 `loss_focus`）、引擎已销毁 |
+| 10007 | `"network error"` | 网络错误（在线识别服务不可达） |
+
+### onFinished
+
+识别正常完成事件：调用 `finish` 后，引擎完成全部结果处理时回调一次，无参数。
+
+## 数据结构
+
+### Auth
+
+| 字段 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ------ | ---- |
+| type | string | `"volcengine"` | 引擎类型，支持 `"volcengine"`（火山引擎）、`"aliyun"`（阿里云） |
+| config | object（JIDL：jsonobject） | 无 | 鉴权配置 JSON 对象；volcengine 需含 `accessKey`/`appKey`/`model`，aliyun 需含 `apiKey`/`model`（均为字符串） |
+
+### AsrConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ------ | ---- |
+| endVadTime | number（int） | `1000` | 静音判定超时时间（毫秒）；传入负数会导致创建失败 |
+| lang | string | `"auto"` | 识别语言，可选 `"auto"` / `"zh"` / `"en"` / `"ja"` |
+| translations | string[] | `null` | 翻译目标语言数组（如 `['en']`）；为 null 时不返回翻译 |
+
+### AsrParams
+
+| 字段 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ------ | ---- |
+| auth | `Auth` | 无 | 鉴权信息（必填） |
+| config | `AsrConfig` | `null` | 识别配置，可省略（省略时 endVadTime 取 1000、lang 取 `"auto"`） |
+
+### AsrResult
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 识别文本 |
+| reformation | number（int） | 句子结束标记（引擎 `sentence_end`）：非 0 为句子最终结果，0 为中间结果 |
+| translations | `AsrTranslationResult[]` | 翻译结果列表，无翻译时为空 |
+
+### AsrTranslationResult
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 译文文本 |
+| lang | string | 译文语言标识 |
+
+## 完整示例
+
+```js
+const speech = require('system.ai.speech')
+
+// 1. 创建识别会话
+const asr = speech.createAsr({
+  auth: {
+    type: 'volcengine',
+    config: {
+      accessKey: 'your-access-key',
+      appKey: 'your-app-key',
+      model: 'your-model-name'
+    }
+  },
+  config: {
+    endVadTime: 1000,
+    lang: 'zh',
+    translations: ['en']
+  }
+})
+
+if (!asr) {
+  console.log('创建 ASR 会话失败，请检查 auth/config 参数')
+} else {
+  // 2. 订阅事件
+  asr.on('onMessage', function (res) {
+    console.log('识别中：', res.text, res.reformation ? '[句末]' : '[...]')
+    if (res.translations) {
+      res.translations.forEach(function (t) {
+        console.log('译文(' + t.lang + ')：', t.text)
+      })
+    }
+  })
+
+  asr.on('onError', function (data, code) {
+    console.log('错误：', code, data) // 200 / 10006 / 10007
+  })
+
+  asr.on('onFinished', function  {
+    console.log('识别完成')
+  })
+
+  // 3. 开始识别
+  asr.start
+
+  // 4a. 正常结束（用户说完）：停止录音，等待 onFinished
+  // asr.finish
+
+  // 4b. 或者中途取消：不产生 onFinished
+  // asr.cancel
+}
+```
+
+## 注意事项
+
+- **创建与异常**：`createAsr` 在 `para` 为空或 `auth`/`auth.config` 缺失时**同步抛出 JS 异常**（`"param error"` / `"auth error"`）；其余参数非法（`endVadTime` 为负、`lang`/`type` 不支持、鉴权字段缺失、引擎创建失败）时返回 `null`，调用方应先判断返回值。
+- **语言与引擎**：`lang` 仅支持 `"auto"`、`"zh"`、`"en"`、`"ja"`；`auth.type` 仅支持 `"volcengine"`、`"aliyun"`；鉴权字段以 `auth.config` JSON 对象传入，字段名区分引擎（volcengine：`accessKey`/`appKey`/`model`；aliyun：`apiKey`/`model`）。
+- **白名单**：调用方包名以 `com.vela.system` 开头时，Native 跳过鉴权配置校验直接建链；普通应用必须提供完整鉴权信息。
+- **`finish` 与 `cancel` 的区别**：`finish` 表示正常说完，引擎会 flush 最终结果并回调 `onFinished`；`cancel` 为放弃识别，Native 不向 JS 派发完成事件。
+- **资源释放**：识别对象被 JS 回收（finalize）时，Native 会自动调用 `ai_asr_finish` 和 `ai_asr_close` 释放引擎；长时间不用时建议主动 `cancel` 或 `finish`。
+- **事件按需派发**：`onMessage`/`onError`/`onFinished` 仅在存在 JS 监听者时才派发；录音焦点丢失（`loss_focus`）会转换为 10006 错误事件。
+- ASR 为在线识别能力，依赖系统 ASR 引擎服务与网络；设备未集成引擎或离线时行为以 Native 实现为准。
+
+## 机型支持明细
+
+<Callout type="warn">
+当前固件下暂不支持，但在后续版本S5中可能支持
+</Callout>
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 不支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 不支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

@@ -1,0 +1,182 @@
+---
+title: "system.internal.messagecenter 跨设备消息中心"
+---
+
+> MiConnect/Message Center 的跨设备消息桥，提供 `subscribe`、`unsubscribe`、`publish` 和 `unpublish`，基于 topic 完成跨设备消息的订阅与发布。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.internal.messagecenter` |
+| Feature 类型 | 社区/商业版资料，openvela 开源仓库未收录 |
+| 所需权限 | 文档未提及 |
+
+## 导入方式
+
+```js
+import messagecenter from '@system.internal.messagecenter'
+```
+
+## 功能概述
+
+本模块是 MiConnect 消息中心（Message Center）的 JS 桥接层，所有方法使用 options 对象和快应用标准回调（success/fail/complete）。底层为 MiConnect 消息中心：发布选项会被转换成 device filter（设备过滤）、目标设备列表和 send type（发送通道/类型）列表。
+
+### 确认成员
+
+| 成员/字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `subscribe` | Function | 订阅 topic；回调收到基础数据和扩展数据 |
+| `unsubscribe` | Function | 取消指定 topic 订阅 |
+| `publish` | Function | 发布消息 |
+| `unpublish` | Function | 取消发布/停止某 topic 的持续发布 |
+| `trustlevel` | Integer | MiConnect 信任级别 |
+| `dispatchtype` | Integer | 分发类型 |
+| `devicefilter` | String[] | 设备过滤列表 |
+| `dstdevicelist` | String[] | 目标设备列表 |
+| `sendtypes` | Integer[] | 发送通道/类型列表 |
+| `basedata` | String/TypedArray | 基础数据 |
+| `extenddata` | String/TypedArray | 扩展数据 |
+
+固件日志还确认订阅回调至少关联 `topic_name`、`basedata` 和 `extenddata`，并分别记录两段数据长度。
+
+## API
+
+### 参数定义
+
+```ts
+interface MessageCallbacks {
+  success?: (data?: object) => void
+  fail?: (data: object, code?: number) => void
+  complete?:  => void
+}
+
+interface MessageData {
+  topic: string
+  basedata?: string | ArrayBuffer | Uint8Array
+  extenddata?: string | ArrayBuffer | Uint8Array
+  trustlevel?: number
+  dispatchtype?: number
+  devicefilter?: string[]
+  dstdevicelist?: string[]
+  sendtypes?: number[]
+}
+
+subscribe(options: MessageCallbacks & {
+  topic: string
+  listener: (message: ReceivedMessage) => void
+}): void
+
+unsubscribe(options: MessageCallbacks & { topic: string }): void
+publish(options: MessageCallbacks & MessageData): void
+unpublish(options: MessageCallbacks & { topic: string }): void
+```
+
+米家应用的订阅回调使用单个结果对象，并读取 `basedata`、`extenddata` 与 `datatype`；不同后端也可能把 topic 放在结果中。接收二进制时先判断 `ArrayBuffer`/TypedArray，再进行 UTF-8 或协议解码。
+
+### 发布对象字段
+
+```js
+const options = {
+  topic: 'vendor.topic',       // topic 字段由实现日志确认，成员字符串可能被全局去重
+  trustlevel: 0,
+  dispatchtype: 0,
+  devicefilter: [],
+  dstdevicelist: [],
+  sendtypes: [],
+  basedata: new Uint8Array,
+  extenddata: new Uint8Array
+}
+```
+
+| 字段 | 用法建议 |
+| ---- | ---- |
+| `topic` | 非空业务主题；四个操作都围绕它工作 |
+| `trustlevel` | MiConnect 信任级别；枚举值未从固件恢复，不要随意提高 |
+| `dispatchtype` | 分发策略；枚举值未知 |
+| `devicefilter` | 允许/筛选设备标识列表；固件逐个复制字符串 |
+| `dstdevicelist` | 明确目标设备列表；固件逐个复制字符串 |
+| `sendtypes` | 传输通道/类型整数列表；枚举未知 |
+| `basedata` | 主负载，建议使用 `Uint8Array` |
+| `extenddata` | 附加元数据，建议使用 `Uint8Array` |
+
+### 调用示例
+
+> topic、信任级别、分发类型和 send type 必须由真实 MiConnect 协议提供。下面使用占位 topic，不能直接用于业务。
+
+```js
+import messagecenter from '@system.internal.messagecenter'
+
+const topic = 'vendor.protocol.topic'
+
+messagecenter.subscribe({
+  topic,
+  listener(message) {
+    console.log(message.topic, message.datatype)
+  },
+  fail(data, code) { console.error('subscribe', code) }
+})
+
+messagecenter.publish({
+  topic,
+  basedata: new Uint8Array([1, 2, 3]),
+  extenddata: new Uint8Array(0),
+  success { console.log('published') },
+  fail(data, code) { console.error('publish', code) }
+})
+
+// 页面销毁时
+messagecenter.unsubscribe({ topic })
+messagecenter.unpublish({ topic })
+```
+
+固件日志中的常见失败点包括：参数错误、topic 复制失败、发布数据创建失败、option 创建失败、未先订阅就取消订阅，以及底层 publish/unpublish 失败。
+
+### 能力探测
+
+```js
+import app from '@system.app'
+
+const feature = '@system.internal.messagecenter'
+const methods = ['subscribe', 'unsubscribe', 'publish', 'unpublish']
+
+for (const method of methods) {
+  console.log(method, app.canIUse(`${feature}.${method}`))
+}
+```
+
+## 生命周期
+
+从 wrapper 与日志可以确认合理顺序为：
+
+1. `subscribe(...)` 建立 topic 订阅；
+2. 订阅回调接收 topic、基础数据和扩展数据；
+3. 不再接收时 `unsubscribe(...)`；
+4. 发布侧用 `publish(...)`，持续发布场景再用 `unpublish(...)` 停止。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **协议私有**：`trustlevel`、`dispatchtype`、`sendtypes` 的枚举整数及设备标识格式仍属于 MiConnect 私有协议，枚举值未从固件恢复，不要凭空猜测或随意提高信任级别。
+- **字段精简原则**：预装米家应用在常用发布场景只传 `topic`、`basedata`、`extenddata` 与回调；不需要定向分发时不要凭空补齐 `trustlevel`/`dispatchtype`/`devicefilter`/`dstdevicelist`/`sendtypes` 等高级字段。
+- **二进制解码**：`basedata`/`extenddata` 可能是字符串或 TypedArray，接收时先判断 `ArrayBuffer`/TypedArray 类型，再做 UTF-8 或业务协议解码。
+- **订阅顺序**：必须先 `subscribe` 再 `unsubscribe`，未订阅就取消会走失败路径；页面销毁时应成对调用 `unsubscribe`/`unpublish` 清理。
+- 当前公开仓库没有该模块的 JIDL 或 C++ 实现，使用前建议用 `app.canIUse` 探测。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)

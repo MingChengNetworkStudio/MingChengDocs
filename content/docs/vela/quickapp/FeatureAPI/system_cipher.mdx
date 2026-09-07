@@ -1,0 +1,486 @@
+---
+title: "system.cipher 加解密"
+---
+
+> 提供 RSA 加解密、RSA 签名/验签、摘要（MD5/SHA 系列）以及 AES 对称加解密能力。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.cipher` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.cipher" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import cipher from '@system.cipher'
+// 或
+const cipher = require('@system.cipher')
+// 本仓库运行时/测试中使用的写法
+const cipher = require('system.cipher')
+```
+
+## 功能概述
+
+`system.cipher` 面向文本数据提供常用密码学操作：
+
+- **RSA 非对称加解密**（`rsa`）：使用 PEM 格式 RSA 密钥对文本进行加密/解密，加密结果做 Base64 编码输出，解密时输入为 Base64 密文。
+- **RSA 签名与验签**（`sign` / `verify`）：对文本做 RSA 签名（输出 Base64 签名串），或验证签名是否有效。
+- **摘要**（`digest` / `md5`）：计算 MD5/SHA1/SHA256/SHA512 摘要，输出十六进制字符串。
+- **AES 对称加解密**（`aes`）：AES-128/256-CBC + PKCS5Padding，密钥与 IV 以 Base64 传入，密文以 Base64 输入输出。
+
+底层通过 `crypto_native.cpp` 调用 mbedTLS 封装接口（`uv_rsa` / `uv_sign` / `uv_verify` / `uv_md` / `uv_aes_*`）完成运算。所有方法均为**回调风格**（success/fail/complete），运算在调用线程内同步完成后立即触发回调。
+
+> 注意：本模块名为 `system.cipher`，与功能更全的 `system.crypto` 是两个不同的 Feature；本模块只提供上述 6 个简化接口。
+
+社区资料（洛汐文档库）将本模块定位为**旧式高层密码接口/兼容层**：官网公开的 `system.crypto` 应作为新代码的首选，`system.cipher` 更适合兼容旧协议；跨平台互通时应把算法、padding、编码和测试向量写入业务协议并实机验证。
+
+## API
+
+> 所有方法均接收一个 params 对象，异步模型为**回调风格**（JIDL 中无 `promise<T>` 声明）。公共回调：
+>
+> - `success(res)`：`res` 为对象，文本类接口为 `{ text: string }`，验签接口为 `{ valid: boolean }`。
+> - `fail(data, code)`：JIDL 声明为 `callback fail_cb(object data, int code)`，Native 实际传入错误信息字符串与错误码。
+> - `complete`：无参数，成功/失败后都会调用。
+>
+> 错误码（来自 `crypto_utils.h` 的 `Cipher_ErrorCode`）：`200`（GENERAL，一般性错误）、`202`（ARGSERROR，参数错误）。
+>
+> 支持的 `hashType`：`MD5`、`SHA1`、`SHA256`、`SHA512`，默认 `SHA256`。所有方法同步返回 `void`，结果只能从回调取得。
+
+### cipher.rsa(opts)
+
+使用 RSA 算法对文本进行加密或解密。
+
+**参数（RSAParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| action | string | 是 | - | 操作类型：`'encrypt'`（加密）或 `'decrypt'`（解密） |
+| text | string | 是 | - | 待加密/解密的文本。加密时为明文；解密时为 **Base64 编码的密文** |
+| key | string | 是 | - | RSA 密钥（PEM 格式字符串），加密/解密所用密钥由调用方按密钥对约定传入 |
+| hashType | string | 否 | `"SHA256"` | JIDL 中保留的哈希类型字段（`MD5`/`SHA1`/`SHA256`/`SHA512`），**当前 `rsa` 实现未使用该字段** |
+| success | function | 否 | - | 成功回调，`res.text` 为结果字符串 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 加密时为 Base64 编码的密文；解密时为明文字符串 |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"invalid action"` | `action` 不是 `'encrypt'`/`'decrypt'` |
+| 0（实现未设置错误码） | `"wrong text param"` | `text` 为空，或 `key` 为空（密钥缺失时实现也返回此消息） |
+| 0（实现未设置错误码） | `"malloc buff failed"` | 解密时分配 Base64 解码缓冲区失败 |
+| 0（实现未设置错误码） | `"base64 decode data failed"` | 解密输入不是合法的 Base64 字符串 |
+| 200 | `"rsa_crypto failed"` | 底层 RSA 运算失败（如密钥无效、密文长度非法等） |
+| 200 | `"malloc result failed"` / `"base64 encode result failed"` | 结果内存分配或 Base64 编码失败 |
+
+> 社区资料（洛汐文档库）提醒：JIDL 只声明输入输出为字符串，未规定 PEM/DER、Base64、字符集、RSA padding 或密文编码的互操作细节；不要假定它与 WebCrypto 的默认格式互通，跨平台/跨端协议必须用目标机型实机和你的密钥格式做测试向量验证。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+...（PEM 公钥）...
+-----END PUBLIC KEY-----`
+
+// 加密
+cipher.rsa({
+  action: 'encrypt',
+  text: 'hello',
+  key: PUBLIC_KEY,
+  success: function (res) {
+    console.log('cipher text:', res.text) // Base64 密文
+  },
+  fail: function (data, code) {
+    console.log('rsa encrypt fail', code, data)
+  },
+  complete: function  {
+    console.log('rsa encrypt complete')
+  }
+})
+
+// 解密（text 为加密得到的 Base64 密文）
+cipher.rsa({
+  action: 'decrypt',
+  text: 'Base64 编码的密文',
+  key: PUBLIC_KEY,
+  success: function (res) {
+    console.log('plain text:', res.text)
+  },
+  fail: function (data, code) {
+    console.log('rsa decrypt fail', code, data)
+  }
+})
+```
+
+### cipher.sign(opts)
+
+使用 RSA 私钥对文本进行签名，输出 Base64 编码的签名串。
+
+**参数（RSAParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| action | string | 否 | - | JIDL 中存在该字段（RSAParam），`sign` 实现不使用 |
+| text | string | 是 | - | 待签名文本 |
+| key | string | 是 | - | RSA 私钥（PEM 格式字符串） |
+| hashType | string | 否 | `"SHA256"` | 签名摘要算法：`MD5`/`SHA1`/`SHA256`/`SHA512` |
+| success | function | 否 | - | 成功回调，`res.text` 为 Base64 签名串 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | Base64 编码的 RSA 签名结果 |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"arguments hashType, text or key are needed"` | `hashType`、`text`、`key` 任一为空 |
+| 200 | 底层错误串（`crypto_err`）或 `"rsa sign error"` | 签名运算失败（如私钥格式错误） |
+
+> 社区资料（洛汐文档库）：固件内包含 `RSA-SHA1`、`RSA-SHA256`、`RSA-SHA512` 算法字符串；JIDL 未规定签名结果的字符串编码，常见情况是 Base64。openvela 实证行为：`success` 回调返回的 `text` 即为 Base64 签名串，可直接传给 `verify`。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+const PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
+...（PEM 私钥）...
+-----END RSA PRIVATE KEY-----`
+
+cipher.sign({
+  text: 'hello',
+  key: PRIVATE_KEY,
+  hashType: 'SHA256',
+  success: function (res) {
+    console.log('signature:', res.text) // Base64 签名串，可传给 verify
+  },
+  fail: function (data, code) {
+    console.log('sign fail', code, data)
+  }
+})
+```
+
+### cipher.verify(opts)
+
+验证 RSA 签名是否有效。
+
+**参数（RSAVerifyParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| text | string | 是 | - | 原始文本 |
+| key | string | 是 | - | RSA 公钥（PEM 格式字符串） |
+| hashType | string | 否 | `"SHA256"` | 签名摘要算法：`MD5`/`SHA1`/`SHA256`/`SHA512`，需与 `sign` 时一致 |
+| signature | string | 是 | - | `sign` 输出的 Base64 签名串 |
+| success | function | 否 | - | 成功回调，`res.valid` 为验签结果 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| valid | boolean | `true` 表示签名匹配；`false` 表示签名不匹配（签名不匹配走 success 回调，不是 fail） |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"arguments hashType, signature, text or key are needed"` | `hashType`、`signature`、`text`、`key` 任一为空 |
+| 200 | 底层错误串（`crypto_err`） | 验签过程出错（如公钥无效、签名 Base64 解码失败等） |
+
+> 社区资料（洛汐文档库）提醒：JIDL 的成功参数是宽泛 object（语义为 boolean），个别运行时可能返回布尔值本身或 `{ result: boolean }` 一类包装对象；openvela 实证行为为 `{ valid: boolean }`，跨运行时兼容代码可先判断 `res` 是布尔值还是对象再取值。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+cipher.verify({
+  text: 'hello',
+  key: PUBLIC_KEY,
+  hashType: 'SHA256',
+  signature: 'sign 返回的 Base64 签名串',
+  success: function (res) {
+    console.log('signature valid:', res.valid) // true / false
+  },
+  fail: function (data, code) {
+    console.log('verify fail', code, data)
+  }
+})
+```
+
+### cipher.digest(opts)
+
+计算文本的消息摘要，输出十六进制字符串。
+
+**参数（DigestParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| hashType | string | 否 | `"SHA256"` | 摘要算法：`MD5`/`SHA1`/`SHA256`/`SHA512` |
+| text | string | 是 | - | 待摘要文本 |
+| success | function | 否 | - | 成功回调，`res.text` 为十六进制摘要串 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 十六进制（小写）摘要字符串，如 SHA-512 为 128 个十六进制字符 |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"arguments hashtype or text are needed"` | `hashType` 或 `text` 为空 |
+| 200 | 底层错误串（`crypto_err`，如 `"crypto.digest calculate failed"`） | 摘要运算失败（如不支持的算法名） |
+
+> 社区资料（洛汐文档库）提醒：摘要作用于 `text` 的内部字符串编码；要对任意二进制数据/文件做摘要，应使用 `system.crypto` 等能明确接受 Uint8Array/文件路径的接口。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+cipher.digest({
+  text: 'hello',
+  hashType: 'SHA512',
+  success: function (res) {
+    console.log('digest:', res.text)
+    // 例如 'hello' 的 SHA-512：
+    // 9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca7...
+  },
+  fail: function (data, code) {
+    console.log('digest fail', code, data)
+  }
+})
+```
+
+### cipher.md5(opts)
+
+计算文本的 MD5 摘要（`digest` 的便捷封装，固定使用 MD5 算法）。
+
+**参数（Md5Param）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| text | string | 是 | - | 待摘要文本 |
+| success | function | 否 | - | 成功回调，`res.text` 为 32 位十六进制 MD5 串 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 32 位十六进制（小写）MD5 字符串 |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"argument text is needed"` | `text` 为空 |
+| 200 | 底层错误串（`crypto_err`） | 摘要运算失败 |
+
+> 社区资料（洛汐文档库）安全提示：MD5 不适合密码存储、签名或完整性安全校验，只应用于被迫兼容的旧协议；新业务请使用 SHA256 及以上算法。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+cipher.md5({
+  text: 'hello',
+  success: function (res) {
+    console.log('md5:', res.text) // 'hello' 的 MD5：5d41402abc4b2a76b9719d911017c592
+  },
+  fail: function (data, code) {
+    console.log('md5 fail', code, data)
+  }
+})
+```
+
+### cipher.aes(opts)
+
+使用 AES 算法对文本进行加密或解密（CBC 模式、PKCS5Padding）。
+
+**参数（AESParam）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| action | string | 是 | - | 操作类型：`'encrypt'`（加密）或 `'decrypt'`（解密） |
+| text | string | 是 | - | 加密时为明文；解密时为 **Base64 编码的密文** |
+| key | string | 是 | - | AES 密钥，**Base64 编码字符串**；解码后长度为 16 字节时使用 AES-128-CBC，32 字节时使用 AES-256-CBC，其他长度报错 |
+| iv | string | 否 | - | 初始向量 IV，**Base64 编码字符串**；不传时默认使用密钥字节作为 IV（IV 长度取 16） |
+| ivOffset | int | 否 | `0` | IV 起始偏移（字节），固件明确检查 offset 不得超过 IV 长度 |
+| ivLen | int | 否 | `16` | IV 使用长度（字节） |
+| success | function | 否 | - | 成功回调，`res.text` 为结果字符串 |
+| fail | function | 否 | - | 失败回调，`(data, code)` |
+| complete | function | 否 | - | 结束回调 |
+
+> 冲突说明：社区资料（洛汐文档库）的参数表将 `iv` 标为必填；openvela 实证行为为**可选**——不传 `iv` 时 Native 直接使用密钥字节作为 IV（IV 长度取 16 字节）。
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 加密时为 Base64 编码的密文；解密时为明文字符串 |
+
+**失败回调 fail**
+
+| code | message | 触发条件 |
+| ---- | ------- | -------- |
+| 202 | `"invalid action"` | `action` 不是 `'encrypt'`/`'decrypt'` |
+| 202 | `"invalid key"` | `key` 为空 |
+| 202 | `"invalid key size"` | Base64 解码后的密钥长度不是 16 或 32 字节 |
+| 202 | `"malloc iv failed"` / `"base64 decode iv failed"` | IV 缓冲区分配失败或 IV 不是合法 Base64 |
+| 0（实现未设置错误码） | `"wrong text param"` | `text` 为空 |
+| 0（实现未设置错误码） | `"malloc buff failed"` / `"base64 decode data failed"` | 解密时缓冲区分配失败或密文不是合法 Base64 |
+| 0（实现未设置错误码） | `"malloc key failed"` / `"base64 decode key failed"` | 密钥缓冲区分配失败或密钥不是合法 Base64 |
+| 200 | `"malloc output failed"` / `"aes non auth crypto error"` / `"malloc result failed"` / `"base64 encode result failed"` | 输出缓冲区分配失败、AES 运算失败或结果编码失败 |
+
+> 社区资料（洛汐文档库）提醒：JIDL 未说明 AES mode、padding、密钥/IV 编码和输出编码；`ivOffset` 与 `ivLen` 指示从 IV 字符串中使用的区段，跨平台协议必须先用固定测试向量验证。
+
+**示例**
+
+```js
+const cipher = require('system.cipher')
+
+// key / iv 均为 Base64 编码字符串；解码后密钥 16 字节 => AES-128-CBC，32 字节 => AES-256-CBC
+cipher.aes({
+  action: 'encrypt',
+  text: 'hello',
+  key: 'MTIzNDU2Nzg5MDEyMzQ1Ng==', // Base64 编码的 16 字节密钥
+  iv: 'MTIzNDU2Nzg5MDEyMzQ1Ng==',  // 可选，不传则使用密钥字节作为 IV
+  ivOffset: 0,
+  ivLen: 16,
+  success: function (res) {
+    console.log('aes cipher text:', res.text) // Base64 密文
+  },
+  fail: function (data, code) {
+    console.log('aes encrypt fail', code, data)
+  }
+})
+
+// 解密
+cipher.aes({
+  action: 'decrypt',
+  text: 'Base64 编码的密文',
+  key: 'MTIzNDU2Nzg5MDEyMzQ1Ng==',
+  success: function (res) {
+    console.log('plain text:', res.text)
+  },
+  fail: function (data, code) {
+    console.log('aes decrypt fail', code, data)
+  }
+})
+```
+
+## 数据结构
+
+### RSAParam
+
+`rsa` 与 `sign` 共用的参数结构。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| action | string | 操作类型：`'encrypt'` / `'decrypt'`（仅 `rsa` 使用） |
+| text | string | 待处理文本 |
+| key | string | RSA 密钥（PEM 格式） |
+| hashType | string | 哈希类型，默认 `"SHA256"`；可选 `MD5`/`SHA1`/`SHA256`/`SHA512`（`rsa` 不使用此字段） |
+| success | function | 成功回调，参数为 `{ text: string }` |
+| fail | function | 失败回调，`(data, code)` |
+| complete | function | 结束回调 |
+
+### RSAVerifyParam
+
+`verify` 的参数结构。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| text | string | 原始文本 |
+| key | string | RSA 公钥（PEM 格式） |
+| hashType | string | 哈希类型，默认 `"SHA256"` |
+| signature | string | Base64 编码的签名串 |
+| success | function | 成功回调，参数为 `{ valid: boolean }` |
+| fail | function | 失败回调，`(data, code)` |
+| complete | function | 结束回调 |
+
+### DigestParam / Md5Param / AESParam
+
+- `DigestParam`：`hashType`（默认 `"SHA256"`）、`text`，加三个回调。
+- `Md5Param`：`text`，加三个回调。
+- `AESParam`：`action`、`text`、`key`、`iv`、`ivOffset`（默认 `0`）、`ivLen`（默认 `16`），加三个回调。
+
+## 常量
+
+JIDL 中以注释形式给出的枚举值：
+
+| 枚举 | 取值 | 用途 |
+| ---- | ---- | ---- |
+| ActionType | `'encrypt'` / `'decrypt'` | `rsa` / `aes` 的 `action` 字段 |
+| HashType | `'MD5'` / `'SHA1'` / `'SHA256'` / `'SHA512'` | `sign` / `verify` / `digest` 的 `hashType` 字段 |
+
+## 注意事项
+
+- **Base64 约定**：RSA/AES 加密输出为 Base64 字符串，解密输入必须是对应的 Base64 密文；AES 的 `key` 和 `iv` 也必须是 Base64 编码。
+- **AES 算法固定**：密钥解码后 16 字节 => AES-128-CBC（mode 5），32 字节 => AES-256-CBC（mode 7）；填充固定为 PKCS5Padding（padding = 0），不支持其他模式/填充的选择。
+- **AES 默认 IV**：不传 `iv` 时，Native 直接使用密钥字节作为 IV、IV 长度取 16 字节；`ivLen`/`ivOffset` 传 0 时按默认值处理（Native 以 `opts->ivLen ? opts->ivLen : 默认值` 判断）；`ivOffset` 不得超过 IV 长度。
+- **验签结果**：签名不匹配时 `verify` 走 **success** 回调并返回 `{ valid: false }`；只有参数缺失或底层运算出错才走 fail。
+- **回调风格**：本模块 JIDL 只声明了 success/fail/complete 回调，没有 Promise 形式；Native 在调用线程内同步完成运算后直接回调。
+- **部分错误路径错误码为 0**：少量参数/内存错误分支（如 Base64 解码失败）Native 只设置了错误信息、未设置错误码，JS 侧收到的 `code` 为 0，具体行为以 Native 实现为准。
+- **与 system.crypto 的区别**：`system.crypto` 提供更完整的密码学接口（含文件摘要、HMAC、AES-GCM、ECDH、Base64 等）；本模块是面向简单文本加解密场景的精简接口。
+- **选择建议**（社区资料：洛汐文档库）：
+  - 新应用优先使用官网公开的 `system.crypto`；
+  - 兼容旧协议可用 `system.cipher`，但应把算法、padding、编码和测试向量写入业务协议，并在目标机型实机验证；
+  - 不要在日志中打印私钥、AES key、IV 或明文；
+  - `SHA1`、`MD5` 仅用于被迫兼容的旧系统。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

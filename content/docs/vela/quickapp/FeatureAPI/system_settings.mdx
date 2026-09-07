@@ -1,0 +1,229 @@
+---
+title: "system.settings 系统设置"
+---
+
+> 提供系统级设置项（属性）的读取、写入与变更订阅能力，典型用于车机场景下读取/监听车辆相关设置。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.settings` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import settings from '@system.settings'
+// 本仓库运行时/测试中使用的写法
+const settings = require('system.settings')
+```
+
+## 功能概述
+
+`system.settings` 以键值（key/value）形式访问系统设置属性，支持读取属性（`getProp`）、写入属性（`setProp`）、订阅属性变更（`subscribeProp`）和取消订阅（`unsubscribeProp`）。典型场景是车机（Mi Wear / Car）应用读取车辆状态与设置，如 `car.cockpitMode`、`car.navigationVibration` 等。
+
+Native 层通过抽象的 `Settings` 接口对接后端：在车机配置（`CONFIG_APP_CAR_CONTROL` + `CONFIG_APP_CAR_SETTINGS`）下链接车载设置服务（`miwear_settings.h`）；在 `CONFIG_APP_CAR_SETTINGS_MOCK` 配置下使用进程内内存 mock（`system_settings/miwear_settings_mock.cpp`）。后端回调发生在独立线程，Feature 内部通过 `uv_async` 把消息投递回 JS/UV 事件循环后再 resolve Promise 或触发订阅回调。
+
+## API
+
+### settings.getProp(key)
+
+读取指定 key 的设置属性。异步模型：**Promise 风格**（`promise<object>`），不支持 success/fail/complete 回调。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | 无 | 要读取的属性名，例如 `car.cockpitMode`；mock 后端中传 `car` 可一次获取全部 `car.*` 属性 |
+
+**成功返回 / Promise resolve**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| （resolve 值） | object | 该 key 对应的属性值。JIDL 声明为 `object`；实际类型由后端返回的 JSON 决定，可能是 number、string 或 object（如 key 为 `car` 时返回包含全部属性的对象） |
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(data: string, code: number)`
+- 实现中实际会返回的错误码与错误信息：
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `key is nullptr` | 未传入 key |
+| 200 | `FT_ERR_GENERAL` | `Settings is nullptr` | Feature 实例未初始化成功 |
+| 200 | `FT_ERR_GENERAL` | `miwear_settings_getprop failed` | 发起读取请求失败 |
+| 200 | `FT_ERR_GENERAL` | `miwear_settings: getprop failed` | 后端返回失败状态（mock 中 key 不以 `car` 开头时） |
+| 1000 | `FT_ERR_TASK_FAILED` | `invalid json string` | 后端返回的数据无法解析为 JSON |
+
+**示例**
+
+```js
+const settings = require('system.settings')
+
+// Promise 风格
+settings.getProp({ key: 'car.cockpitMode' })
+  .then(value => {
+    console.log('cockpitMode =', value)
+  })
+  .catch((data, code) => {
+    console.log('getProp fail', code, data)
+  })
+
+// 一次获取全部 car.* 属性（mock 后端支持）
+settings.getProp({ key: 'car' }).then(obj => {
+  console.log('all car settings:', obj)
+})
+```
+
+### settings.setProp(set_parm)
+
+写入指定 key 的设置属性。异步模型：**Promise 风格**（`promise<void>`）。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | 无 | 要写入的属性名 |
+| value | object（JS 侧仅接受 string / number） | 是 | 无 | 要写入的值。Native 层仅接受字符串和数字类型，其它类型会被拒绝；写入前统一转换为字符串发给后端 |
+
+**成功返回 / Promise resolve**
+
+无（`promise<void>`，resolve 时不带数据）。写入成功后，已订阅该 key 的回调会收到属性更新通知。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(data: string, code: number)`
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `key or value is nullptr` | 未传入 key 或 value |
+| 202 | `FT_ERR_ARGS` | `setprop should be string or number` | value 不是 string/number 类型（如 boolean、object、数组） |
+| 202 | `FT_ERR_ARGS` | `conver to string failed` | value 转换为字符串失败（message 为实现中的原文拼写） |
+| 200 | `FT_ERR_GENERAL` | `Settings is nullptr` | Feature 实例未初始化成功 |
+| 200 | `FT_ERR_GENERAL` | `miwear_settings_setprop failed` | 发起写入请求失败 |
+| 200 | `FT_ERR_GENERAL` | `miwear_settings setprop failed` | 后端返回失败状态（mock 中写入不存在的 key 时） |
+
+**示例**
+
+```js
+const settings = require('system.settings')
+
+settings.setProp({ key: 'car.navigationVibration', value: 1 })
+  .then( => {
+    console.log('setProp ok')
+  })
+  .catch((data, code) => {
+    console.log('setProp fail', code, data)
+  })
+
+settings.setProp({ key: 'car.vid', value: '456' }).catch((data, code) => {
+  console.log('setProp fail', code, data)
+})
+```
+
+### settings.subscribeProp(subscribe)
+
+订阅指定 key 的设置属性变更；属性变化时通过 callback 返回新值。异步模型：**Promise 风格**（`promise<void>`），订阅动作本身的成功/失败通过 Promise 返回，后续属性变更通过 `callback` 回调推送。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | 无 | 要订阅的属性名 |
+| callback | function（`OnUpdate(object new_value)`） | 是 | 无 | 属性变更回调，参数 `new_value` 为后端推送的更新内容解析出的对象，例如 `{ "car.cockpitMode": 1 }`；数据无法解析为 JSON 时该次更新会被丢弃（仅打印告警），不会触发回调 |
+
+**成功返回 / Promise resolve**
+
+无（`promise<void>`），表示订阅已建立。对**同一个 Feature 实例**重复订阅同一个 key 不会创建新订阅，而是用新的 callback 替换旧的 callback。
+
+**失败回调 fail / Promise reject**
+
+- 参数：`(data: string, code: number)`
+
+| code | 常量 | message | 触发条件 |
+| ---- | ---- | ------- | -------- |
+| 202 | `FT_ERR_ARGS` | `key is nullptr` | 未传入 key |
+| 200 | `FT_ERR_GENERAL` | `Settings is nullptr` | Feature 实例未初始化成功 |
+| 200 | `FT_ERR_GENERAL` | `miwear_settings_subscribe failed` | 后端订阅失败 |
+
+**示例**
+
+```js
+const settings = require('system.settings')
+
+settings.subscribeProp({
+  key: 'car.cockpitMode',
+  callback: function (newValue) {
+    // newValue 形如 { "car.cockpitMode": 1 }
+    console.log('settings updated:', newValue)
+  }
+})
+  .then( => {
+    console.log('subscribe ok')
+  })
+  .catch((data, code) => {
+    console.log('subscribe fail', code, data)
+  })
+```
+
+### settings.unsubscribeProp(key)
+
+取消指定 key 的属性变更订阅。**同步方法**（JIDL 声明为 `void`），不返回 Promise、没有返回值；失败时仅在 Native 层打印告警日志，JS 侧无感知。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| key | string | 是 | 无 | 要取消订阅的属性名（直接作为第一个参数传入，不是对象） |
+
+**返回值**
+
+无。
+
+**示例**
+
+```js
+const settings = require('system.settings')
+
+settings.unsubscribeProp('car.cockpitMode')
+```
+
+## 注意事项
+
+- **value 类型限制**：`setProp` 的 value 在 Native 层只接受 string 和 number（JS 侧），传入 boolean/object/array 会以 202 参数错误拒绝；数字和字符串最终都会以字符串形式发送给后端。
+- **异步模型**：所有读写/订阅请求都是异步的，后端回调来自独立线程，经 `uv_async` 切回 JS 事件循环后再执行 resolve / 订阅回调，JS 回调中可安全操作 UI。
+- **订阅生命周期**：订阅是持久实体，只有显式调用 `unsubscribeProp` 或 Feature 实例被销毁（detach/destroy）时才会清理；Feature 实例 detach 时，与该实例关联的未完成读写请求和订阅会被自动回收。
+- **重复订阅**：同一 Feature 实例对同一 key 重复 `subscribeProp` 不会产生多个回调，旧 callback 会被新 callback 替换。
+- **mock 后端行为**（`CONFIG_APP_CAR_SETTINGS_MOCK`，具体行为以 Native 实现为准）：
+  - 内置 key 均为 `car.*` 前缀（如 `car.cockpitMode`、`car.navigationVibration` 等），数字型 key 默认值为 `0`，`car.vid` 默认值为字符串 `"123"`；
+  - `getProp({ key: 'car' })` 可一次返回全部属性；读取不以 `car` 开头的 key 会失败；
+  - `setProp` 写入 mock 中不存在的 key 会失败；
+  - mock 的 `unsubscribeProp` 无法区分 Feature 实例（实现中有 TODO 注释）：多个实例订阅同一 key 时，取消订阅会把该 key 的所有订阅一并移除。
+- 真实车机后端（`miwear_settings.h`，车载设置服务）的可用 key 集合、取值范围与错误行为以车载系统服务实现为准。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 部分支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

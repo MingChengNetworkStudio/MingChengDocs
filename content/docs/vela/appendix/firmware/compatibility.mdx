@@ -1,0 +1,45 @@
+---
+title: "权限与兼容性"
+---
+
+## manifest 声明不等于授权
+以下 feature 很可能受系统签名、包名或白名单限制：
+
+  * `service.wechat`
+  * `system.internal.power`
+  * `system.internal.activity`
+  * `system.internal.messagecenter`
+  * `system.exchange` 的 `vendor` / `application` scope
+  * `service.health`
+
+## 建议的启动时能力表
+
+```text
+
+import app from '@system.app'
+
+const candidates = [
+  '@locale',
+  '@Error',
+  '@jumpApp',
+  '@system.cipher',
+  '@system.exchange',
+  '@system.mqttmessage',
+  '@system.zlib',
+  '@system.media',
+  '@service.health',
+  '@service.wechat',
+  '@system.internal.power',
+  '@system.internal.activity',
+  '@system.internal.messagecenter',
+  '@system.folme'
+]
+
+export const supportedPrivateFeatures = Object.fromEntries(
+  candidates.map(name => [name, app.canIUse(name)])
+)
+
+```
+
+## 机型可用性
+不同手环/手表会通过 Kconfig、硬件驱动、系统服务、产品白名单或旧/新 feature 管理器裁剪模块。各快应用模块的机型支持状况见对应模块文档末尾的「机型支持明细」。

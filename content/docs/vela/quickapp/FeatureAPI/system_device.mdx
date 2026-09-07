@@ -1,0 +1,411 @@
+---
+title: "system.device 设备信息"
+---
+
+> 获取设备的品牌、型号、系统版本、屏幕参数、设备标识、存储空间等信息。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.device` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | `getDeviceId`、`getSerial` 需要 `hapjs.permission.DEVICE_INFO`；其余方法无 |
+
+## 接口声明
+
+```json
+{ "name": "system.device" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import device from '@system.device'
+// 或
+const device = require('@system.device')
+// 本仓库运行时/测试中使用的写法
+const device = require('system.device')
+```
+
+## 功能概述
+
+该 Feature 提供设备信息查询能力：`getInfo` 通过 `uv_getdeviceinfo` 获取品牌、型号、操作系统版本、屏幕尺寸/密度、语言地区等整机信息（快应用平台版本信息在 `CONFIG_QUICKAPP` 下取自 `quickapp.h` 的 `QAppVersion`/`QAppVersionCode`/`QAppAPILevel`）；`getDeviceId`/`getId`/`getSerial` 通过 `uv_devinfobuff` 读取设备唯一标识与序列号；`getTotalStorage`/`getAvailableStorage` 通过 `statfs("/data")` 统计用户数据分区的总容量与可用容量（字节数）。
+
+除 `getDeviceId` 同时具有**同步返回值**和可选回调外，其余方法均为**回调风格**（success/fail/complete），JIDL 中未声明 Promise。
+
+官方标准文档列出了 `getInfo`、`getDeviceId`、`getSerial`、`getTotalStorage`、`getAvailableStorage` 共 5 个方法；`getId` 以及 `getInfo` 返回对象中的 `IMEI`、`miProductId`、`deviceModel`、`miDeviceAlias` 等字段为官方文档未列出、openvela 实证存在的扩展内容（社区资料：洛汐文档库亦有记载）。
+
+## API
+
+### device.getInfo(cb)
+
+获取设备整机信息。
+
+**参数（getinfo_params）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`getinfo_success_cb`） | 否 | 无 | 成功回调，参数为 `Device` 对象 |
+| fail | callback（`fail_cb`） | 否 | 无 | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | 无 | 结束回调（成功失败都会调用），无参数 |
+
+**成功返回 / success 回调参数（Device）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| brand | string | 设备品牌 |
+| IMEI | string | 设备标识（Native 取自设备信息中的 did 字段） |
+| manufacturer | string | 制造商（官方文档描述：设备生产商） |
+| model | string | 设备型号 |
+| product | string | 产品名（官方文档描述：设备代号） |
+| osType | string | 操作系统类型（官方文档描述：操作系统名称） |
+| osVersionName | string | 操作系统版本名 |
+| osVersionCode | int（JS: number） | 操作系统版本号 |
+| platformVersionName | string | 快应用平台版本名（`CONFIG_QUICKAPP` 下取自 `QAppVersion`，否则为 `"unknown"`；官方文档描述：运行平台版本名称） |
+| platformVersionCode | int（JS: number） | 快应用平台版本号（仅 `CONFIG_QUICKAPP` 下赋值，否则为 0；官方文档描述：运行平台版本号） |
+| APILevel | int（JS: number） | 快应用 API Level（仅 `CONFIG_QUICKAPP` 下取自 `QAppAPILevel`，否则为 0；官方文档标注自 API Level 2 起支持，含义为框架 API 版本） |
+| language | string | 系统语言 |
+| region | string | 系统地区 |
+| screenWidth | int（JS: number） | 屏幕宽度（像素，官方文档描述：屏幕宽） |
+| screenHeight | int（JS: number） | 屏幕高度（像素，官方文档描述：屏幕高） |
+| deviceType | string | 设备类型。官方文档标注可取值：`watch`（手表）、`band`（手环）、`smartspeaker`（智能音箱），自 API Level 2 起支持 |
+| screenShape | string | 屏幕形状。官方文档标注可取值：`rect` 表示方形屏、`circle` 表示圆形屏、`pill-shaped` 表示胶囊形屏（胶囊形自 API Level 3 起支持） |
+| screenDensity | double（JS: number） | 屏幕密度，Native 层保留 1 位小数。官方文档语义：即设备像素比（DPR），是设备物理像素和逻辑像素（DP）的比值，计算公式为 DPR = 设备 PPI / 160（PPI 为每英寸像素数）；该字段自 API Level 3 起支持 |
+| miProductId | string | 小米产品 ID（编译配置 `CONFIG_MIWEAR_DEVICE_PID`，未配置时为空） |
+| deviceModel | string | 设备模型名（编译配置 `CONFIG_DEVICE_MODEL`，未配置时为空） |
+| miDeviceAlias | string | 小米设备别名（编译配置 `CONFIG_MIWEAR_DEVICE_ALIAS`，未配置时为空） |
+
+> 官方标准文档的 `getInfo` 返回字段表未列入 `IMEI`、`miProductId`、`deviceModel`、`miDeviceAlias` 四个字段。社区资料（洛汐文档库）提醒：无蜂窝硬件的设备上 `IMEI` 可能为空字符串或字段不存在，业务代码应做字段存在性判断，不要把这些扩展字段作为必填。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：`uv_getdeviceinfo` 返回非 0 时触发，message 为 `get device info failed`，code 为底层返回的状态值（实现未定义固定错误码）。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+device.getInfo({
+  success: function (ret) {
+    console.log('brand:', ret.brand)
+    console.log('model:', ret.model)
+    console.log('os:', ret.osType, ret.osVersionName)
+    console.log('screen:', ret.screenWidth, 'x', ret.screenHeight, ret.screenDensity)
+    // 扩展字段建议先判断存在性（社区资料：洛汐文档库）
+    if (ret.miProductId) {
+      console.log('mi product:', ret.miProductId, ret.deviceModel, ret.miDeviceAlias)
+    }
+  },
+  fail: function (data, code) {
+    console.log('getInfo fail', code, data)
+  },
+  complete: function  {
+    console.log('getInfo complete')
+  }
+})
+```
+
+### device.getDeviceId(cb)
+
+获取设备唯一标识（device id）。该方法**同步返回**设备 ID 字符串，同时支持可选的回调方式获取结果。
+
+**权限要求**
+
+官方标准文档要求"获取设备信息"权限，开发者需要在 `manifest.json` 里面配置：
+
+```json
+{
+  "permissions": [
+    { "name": "hapjs.permission.DEVICE_INFO" }
+  ]
+}
+```
+
+> 社区资料（洛汐文档库）补充：当前 openvela Feature Framework 源码在 `FeatureInstance::isBlackListed` 中专门匹配 `system.device` + `getDeviceId`，命中后 `requestPermissions` 直接返回 `false`。因此"在 manifest 中声明权限"并不足以让普通应用调用成功；只有设备厂商移除该黑名单，或系统通过预授权/白名单绕过动态申请时，接口才可能可用。该接口涉及稳定设备标识，真机行为务必实测。
+
+**参数（common_params，整体可选，JIDL 中 `cb = null`）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`common_success_cb`） | 否 | null | 成功回调，参数为对象 `{ deviceId: string }` |
+| fail | callback（`fail_cb`） | 否 | null | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | null | 结束回调，无参数 |
+
+**成功返回**
+
+- 同步返回值：`string`，设备 ID（Native 内部缓冲区 33 字节）。
+- success 回调参数：`object`，结构为 `{ deviceId: string }`。
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：读取设备标识失败（`uv_devinfobuff` 返回非 0）时触发，message 为 `getDeviceid failed`，code 为底层状态值。
+
+> 所需权限：`hapjs.permission.DEVICE_INFO`。官方标准文档只描述了回调形式；同步返回形式为 openvela 实证行为（JIDL 将其定义为返回 String、回调对象可为 `null`）。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+// 同步返回值写法
+const id = device.getDeviceId
+console.log('device id:', id)
+
+// 回调写法（参数可省略）
+device.getDeviceId({
+  success: function (ret) {
+    console.log('deviceId:', ret.deviceId)
+  },
+  fail: function (data, code) {
+    console.log('getDeviceId fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+社区资料（洛汐文档库）给出的兼容写法（同时接受同步返回和回调，避免不同运行时差异）：
+
+```js
+function readDeviceId {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const done = value => {
+      if (!settled && value != null) {
+        settled = true
+        resolve(value)
+      }
+    }
+
+    try {
+      const returned = device.getDeviceId({
+        success: done,
+        fail: (message, code) => reject({ message, code })
+      })
+      done(returned)
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+```
+
+### device.getId(cb)
+
+获取设备唯一标识（device id），回调风格。功能与 `getDeviceId` 相同，但仅通过回调返回结果。
+
+> 社区资料（洛汐文档库）：固件中存在独立的 `system_device_wrap_getId` 绑定，不是 `getDeviceId` 的字符串残留，属于内部 ID 获取接口；官方标准文档未列出该方法。
+
+**参数（common_params）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`common_success_cb`） | 否 | 无 | 成功回调，参数为对象 `{ deviceId: string }` |
+| fail | callback（`fail_cb`） | 否 | 无 | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | 无 | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| deviceId | string | 设备唯一标识 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：读取失败时 message 为 `getId failed`，code 为底层 `uv_devinfobuff` 返回的状态值。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+device.getId({
+  success: function (ret) {
+    console.log('deviceId:', ret.deviceId)
+  },
+  fail: function (data, code) {
+    console.log('getId fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### device.getSerial(cb)
+
+获取设备序列号（serial）。
+
+**权限要求**
+
+官方标准文档要求"获取设备信息"权限，开发者需要在 `manifest.json` 里面配置：
+
+```json
+{
+  "permissions": [
+    { "name": "hapjs.permission.DEVICE_INFO" }
+  ]
+}
+```
+
+**参数（common_params）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`common_success_cb`） | 否 | 无 | 成功回调，参数为对象 `{ serial: string }` |
+| fail | callback（`fail_cb`） | 否 | 无 | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | 无 | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| serial | string | 设备序列号（Native 内部缓冲区 33 字节） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：读取失败时 message 为 `getSerial failed`，code 为底层状态值。
+
+> 所需权限：`hapjs.permission.DEVICE_INFO`。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+device.getSerial({
+  success: function (ret) {
+    console.log('serial:', ret.serial)
+  },
+  fail: function (data, code) {
+    console.log('getSerial fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### device.getTotalStorage(cb)
+
+获取用户数据分区的总存储容量（字节）。官方文档描述：获取存储空间的总大小，单位是 Byte。
+
+**参数（common_params）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`common_success_cb`） | 否 | 无 | 成功回调，参数为对象 `{ totalStorage: number }` |
+| fail | callback（`fail_cb`） | 否 | 无 | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | 无 | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| totalStorage | number（int64） | 总存储容量，单位字节。Native 层对 `/data` 分区执行 `statfs`，取值为 `f_bsize * f_blocks` |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：`statfs` 失败时 message 为 `getTotalStorage failed`，code 为底层返回的状态值（实现未定义固定错误码）。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+device.getTotalStorage({
+  success: function (ret) {
+    console.log('total storage:', ret.totalStorage, 'bytes')
+    console.log('total storage:', (ret.totalStorage / (1024 * 1024 * 1024)).toFixed(2), 'GB')
+  },
+  fail: function (data, code) {
+    console.log('getTotalStorage fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+### device.getAvailableStorage(cb)
+
+获取用户数据分区的可用存储容量（字节）。官方文档描述：获取存储空间的可用大小，单位是 Byte。
+
+**参数（common_params）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | callback（`common_success_cb`） | 否 | 无 | 成功回调，参数为对象 `{ availableStorage: number }` |
+| fail | callback（`fail_cb`） | 否 | 无 | 失败回调，签名 `(data: string, code: number)` |
+| complete | callback（`complete_cb`） | 否 | 无 | 结束回调，无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| availableStorage | number（int64） | 可用存储容量，单位字节。Native 层对 `/data` 分区执行 `statfs`，取值为 `f_bsize * f_bavail` |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息：`statfs` 失败时 message 为 `getAvailableStorage failed`，code 为底层返回的状态值（实现未定义固定错误码）。
+
+**示例**
+
+```js
+const device = require('system.device')
+
+device.getAvailableStorage({
+  success: function (ret) {
+    console.log('available storage:', ret.availableStorage, 'bytes')
+  },
+  fail: function (data, code) {
+    console.log('getAvailableStorage fail', code, data)
+  },
+  complete: function  {}
+})
+```
+
+## 数据结构
+
+### Device
+
+`getInfo` 成功回调返回的设备信息对象，字段完整列表见上文 `getInfo` 小节的表格（共 21 个字段：`brand`、`IMEI`、`manufacturer`、`model`、`product`、`osType`、`osVersionName`、`osVersionCode`、`platformVersionName`、`platformVersionCode`、`APILevel`、`language`、`region`、`screenWidth`、`screenHeight`、`deviceType`、`screenShape`、`screenDensity`、`miProductId`、`deviceModel`、`miDeviceAlias`）。
+
+## 注意事项
+
+- **异步模型**：本 Feature 方法为回调风格（success/fail/complete），JIDL 未声明 Promise；`getDeviceId` 额外提供同步字符串返回值（其参数 `cb` 默认为 `null`，可不传）。
+- **权限**：`getDeviceId` 与 `getSerial` 在 JIDL 上标注了 `[permissions="hapjs.permission.DEVICE_INFO"]`，调用前需在应用配置（`manifest.json`）中声明该权限；`getId` 与 `getDeviceId` 读取的是同一份设备标识，但 `getId` 没有权限注解。社区资料（洛汐文档库）指出运行时还存在 `system.device` + `getDeviceId` 的权限黑名单拦截（见 `getDeviceId` 小节），仅在 manifest 声明权限不保证调用成功。
+- **平台相关字段**：`platformVersionName`/`platformVersionCode`/`APILevel` 仅在编译启用 `CONFIG_QUICKAPP` 时由快应用运行时填充（否则分别为 `"unknown"` 和 0）；`miProductId`、`deviceModel`、`miDeviceAlias` 分别依赖编译配置 `CONFIG_MIWEAR_DEVICE_PID`、`CONFIG_DEVICE_MODEL`、`CONFIG_MIWEAR_DEVICE_ALIAS`，未配置时为空字符串。
+- **存储空间统计口径**：`getTotalStorage`/`getAvailableStorage` 统计的是 `/data` 挂载点（`USERSPACE_PATH`），容量以字节为单位返回，数值为 int64，JS 中按 number 使用。
+- **回调一次性**：success/fail/complete 回调在调用后即被 Native 层移除，每次查询都需要重新传入回调。
+- **隐私与稳定性**（社区资料：洛汐文档库）：
+  - `getId`、`getDeviceId`、`IMEI` 都可能属于稳定设备标识，受 `hapjs.permission.DEVICE_INFO` 和系统隐私策略约束；
+  - 不要把设备标识写入日志、URL 查询参数或全局 exchange；
+  - `miDeviceAlias` 可能由用户修改，不适合作唯一键；
+  - `deviceModel` 与产品 ID 适合做兼容性分支判断，但仍需同时检查 feature 能力（如配合 `@system.app` 的 `canIUse`）。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

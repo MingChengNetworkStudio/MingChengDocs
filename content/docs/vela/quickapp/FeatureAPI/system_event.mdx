@@ -1,0 +1,294 @@
+---
+title: "system.event 应用内事件总线（订阅/发布）"
+---
+
+> 提供事件的发布与订阅能力：应用既可订阅系统（公共）事件（如电量变化、充放电状态），也可在应用内/跨应用发布和订阅自定义事件。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.event` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无（官方接口声明：`{ "name": "system.event" }`；跨应用事件由发布方在 `options.permissions` 中声明接收方包名） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import event from '@system.event'
+// 本仓库运行时/测试中使用的写法
+const event = require('system.event')
+```
+
+## 功能概述
+
+该 Feature 在 Native 层基于 **uORB（micro Object Request Broker）消息主题**实现事件总线：订阅时通过 `uv_topic_subscribe` 在 libuv 事件循环上监听 uORB 主题，发布时通过 `uv_topic_publish` 向主题写入数据。内置两类主题：
+
+- **系统事件主题**（`topics/battery_topic.cpp`，监听 `battery_state` 主题）：电量变化、开始充电、停止充电；事件名以 `usual.event.` 为前缀（Native 宏 `SYSTEM_EVENT_PREFIX`），**应用只能订阅、不能发布**。
+- **用户事件主题**（`topics/user_topic.cpp`，监听 `user_event_meta` 主题）：应用自定义事件，事件名不能以 `usual.event.` 开头；支持应用内投递，也支持发布方通过 `options.permissions` 授权指定包名的其他应用接收。
+
+事件数据到达后在 JS 事件循环线程上分发：Native 层比较前后两次主题数据（如电量电平是否变化、充放电状态是否翻转），状态满足条件时才回调 JS。
+
+## API
+
+### event.publish(param)
+
+发布一个自定义（用户/公共）事件。方法无返回值，发布失败时仅记录 Native 日志、不会回调 JS。
+
+**参数（publish_t）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| eventName | string | 是 | 无 | 事件名称，非空，长度小于 32 字符；**不能以 `usual.event.` 开头**（系统公共事件保留名称被系统占用，禁止应用发布） |
+| options | object（`option_t`） | 否 | null | 发布选项，见下表 |
+
+**options（option_t）字段**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| params | object | 否 | null | 随事件传递给订阅者的数据，必须是 object 类型；Native 层序列化为 JSON 后投递，长度需小于 128 字符 |
+| permissions | string[]（Array&lt;string&gt;） | 否 | 无 | 允许接收该事件的其他应用包名列表（订阅者权限：拥有权限的包才能收到该事件，用于跨应用授权）；Native 层以逗号拼接，总长度需小于 64 字符 |
+
+**成功返回 / success 回调参数**
+
+无（方法返回值为 `void`）。
+
+**失败回调 fail / Promise reject**
+
+无 fail 回调、无 Promise。以下情况发布失败（仅 Native 日志，JS 无返回）：
+
+- `eventName` 为空；
+- `eventName` 是系统事件（以 `usual.event.` 开头）；
+- 该事件当前没有任何订阅者（Native 校验 `isEventSubscribed`，无人订阅则放弃发布）；
+- 事件名/包名/params/permissions 超出长度限制；
+- `options.params` 不是 object 类型；
+- 底层 `uv_topic_publish` 失败。
+
+**示例**
+
+```js
+const event = require('system.event')
+
+// 应用内发布一个自定义事件（params 必须是对象）
+event.publish({
+  eventName: 'myapp.refresh',
+  options: {
+    params: { from: 'home', timestamp: Date.now }
+  }
+})
+
+// 跨应用发布：授权包名为 com.example.other 的应用接收
+event.publish({
+  eventName: 'myapp.shared',
+  options: {
+    params: { msg: 'hello' },
+    permissions: ['com.example.other']
+  }
+})
+
+// 不带参数发布
+event.publish({ eventName: 'myapp.ping' })
+```
+
+### event.subscribe(param)
+
+订阅一个事件（系统公共事件或自定义事件）。
+
+**参数（sub_t）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| eventName | string | 是 | 无 | 事件名称。系统事件以 `usual.event.` 开头（见下方内置事件列表）；自定义事件名不能使用该前缀 |
+| callback | callback（`subscribe_cb`） | 是 | 无 | 事件回调，签名 `function (data: subs_cb_t)` |
+
+**返回值**
+
+- 订阅成功：返回订阅标识 `id`（number，整数，即事件 id），用于 `unsubscribe` 取消订阅。
+- 订阅失败（`eventName` 为空、callback 无效、订阅了不支持的系统事件名等）：返回 `undefined`。
+
+**回调参数（subs_cb_t）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| params | object | 事件数据：自定义事件为发布方 `options.params` 解析后的对象（发布方未传 params 时为 `undefined`）；系统事件的数据见下方事件列表 |
+| package | string | 事件推送者（来源）包名；系统事件固定为 `"system"`，自定义事件为发布方应用的包名，可用于判断事件来源 |
+
+**内置系统（公共）事件**（`usual.event.` 前缀，定义于 `event/topics/battery_topic.cpp`）：
+
+| eventName | 触发时机 | 回调 params |
+| ---- | ---- | ---- |
+| `usual.event.BATTERY_CHANGED` | 电池电量电平发生变化 | number：当前电量比例，取值 0~1（如 0.75 表示 75%，Native 层为 `level / 100`；官方描述为 level: 0.0–1.0 之间） |
+| `usual.event.CHARGING` | 充电状态由未充电变为充电中（state 0→1，即开始充电） | `undefined`（无数据） |
+| `usual.event.DISCHARGING` | 充电状态由充电中变为未充电（state 1→0，即停止充电） | `undefined`（无数据） |
+
+> 订阅不在上表中的 `usual.event.*` 事件名会失败（Native 日志 `current topic dont support event`，返回 `undefined`）。
+
+**自定义事件投递规则**（`event/topics/user_topic.cpp`）：订阅者满足以下任一条件才会收到事件——① 订阅者与发布者包名相同（应用内事件）；② 订阅者包名出现在发布方 `options.permissions` 列表中（跨应用授权事件）。
+
+**示例**
+
+```js
+const event = require('system.event')
+
+// 订阅系统电量事件
+const batterySub = event.subscribe({
+  eventName: 'usual.event.BATTERY_CHANGED',
+  callback: function (data) {
+    console.log('battery level:', data.params, 'from:', data.package)
+  }
+})
+console.log('subscribe id:', batterySub)
+
+// 订阅充电/结束充电事件
+event.subscribe({
+  eventName: 'usual.event.CHARGING',
+  callback: function (data) {
+    console.log('charging started, package =', data.package)
+  }
+})
+event.subscribe({
+  eventName: 'usual.event.DISCHARGING',
+  callback: function (data) {
+    console.log('charging stopped')
+  }
+})
+
+// 订阅自定义事件
+const mySub = event.subscribe({
+  eventName: 'myapp.refresh',
+  callback: function (data) {
+    console.log('refresh event, params =', data.params, 'from =', data.package)
+  }
+})
+if (mySub === undefined) {
+  console.log('subscribe failed')
+}
+```
+
+官方示例——按来源包名过滤事件：
+
+```js
+const evtId = event.subscribe({
+  eventName: 'myEventName',
+  callback: function (res) {
+    if (res.package === 'com.example.demo') {
+      console.log(res.params)
+    }
+  }
+})
+console.log(evtId)
+```
+
+### event.unsubscribe(param)
+
+取消订阅。方法无返回值。
+
+**参数（unsubs_t）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| id | number（JIDL: int） | 是 | 无 | `subscribe` 成功时返回的订阅标识（事件 id） |
+
+**成功返回 / 失败回调**
+
+无返回值（`void`），无 fail 回调。仅当 `id` 属于当前 Feature 实例（即由当前应用实例的 `subscribe` 返回）时才会真正移除订阅；id 不匹配时不做任何操作（Native 日志 `current instance not match id` / `no such subscription info`）。
+
+**示例**
+
+```js
+const event = require('system.event')
+
+const subId = event.subscribe({
+  eventName: 'myapp.refresh',
+  callback: function (data) {
+    console.log('got event', data.params)
+  }
+})
+
+// 之后取消订阅
+event.unsubscribe({ id: subId })
+```
+
+## 数据结构
+
+### option_t
+
+`publish` 的 `options` 字段类型。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| params | object | 事件数据对象，可空（默认 null）；Native 序列化为 JSON 投递，需小于 128 字符 |
+| permissions | string[] | 允许接收事件的其他应用包名数组（订阅者权限），可空 |
+
+### publish_t
+
+`publish` 方法参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| eventName | string | 事件名，非空、小于 32 字符、不能以 `usual.event.` 开头 |
+| options | option_t | 发布选项，可空（默认 null） |
+
+### sub_t
+
+`subscribe` 方法参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| eventName | string | 要订阅的事件名 |
+| callback | callback（`subscribe_cb`） | 事件回调函数 |
+
+### subs_cb_t
+
+事件回调 `subscribe_cb` 的参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| params | object | 事件数据（系统事件见内置事件表；自定义事件为发布方 params 对象或 undefined） |
+| package | string | 事件推送者包名，系统事件为 `"system"` |
+
+### unsubs_t
+
+`unsubscribe` 方法参数。
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| id | int（JS: number） | subscribe 返回的订阅标识 |
+
+## 机型支持明细
+
+官方标准文档给出的设备支持情况：
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **事件命名**：系统公共事件统一使用 `usual.event.` 前缀（保留名称被系统占用），应用自定义事件**不能**使用该前缀；系统事件只能订阅、不能发布（publish 会直接失败）。
+- **先订阅后发布**：发布自定义事件时，Native 层会检查全局是否存在该事件的订阅者，无人订阅时发布直接丢弃。
+- **跨应用事件**：自定义事件默认只在同包名应用内投递；发布方需要在 `options.permissions` 中写入接收方包名，接收方才能收到。回调中的 `package` 字段可用于判断事件来源。
+- **长度限制**（uORB 主题 `user_event_meta` 结构体上限，总大小 264 字节）：事件名 < 32 字符、包名 < 32 字符、params JSON < 128 字符、permissions 拼接后 < 64 字符，超出会发布失败。
+- **params 类型**：`options.params` 只接受 object 类型，传其他类型会发布失败；系统事件回调的 `params` 类型由内置事件定义（电量为 number，充放电为 undefined）。
+- **订阅标识**：`subscribe` 成功返回 number 型 id，失败返回 `undefined`；`unsubscribe` 只能取消本实例创建的订阅。
+- **生命周期**：Feature 实例 detach/destroy 时，Native 层会自动注销该实例持有的 uORB 主题监听并清理全部订阅回调，无需手动取消。
+- **底层依赖**：事件分发依赖系统 uORB 服务与 libuv 事件循环（`uv_topic_*` 接口）；电量事件数据来源于系统 `battery_state` 主题，具体行为以 Native 实现为准。
+
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

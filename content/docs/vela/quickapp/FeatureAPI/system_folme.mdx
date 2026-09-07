@@ -1,0 +1,146 @@
+---
+title: "system.folme Folme 动画桥"
+---
+
+> 小米 UI Folme 动画桥：面向旧 UI 引擎对象的原生动画能力，支持属性立即设置、属性间动画、分组动画与动画状态查询/取消。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.folme` |
+| Feature 类型 | 社区/商业版资料，openvela 开源仓库未收录 |
+| 所需权限 | 文档未提及 |
+
+## 导入方式
+
+```js
+import folme from '@system.folme'
+```
+
+## 功能概述
+
+`system.folme` 是面向**旧 UI 引擎对象**的原生动画桥，不是普通 DOM/CSS API。状态对象以 `attr`、`fromState`、`toState` 和配置项组合表达。提供以下成员：
+
+| 成员 | 说明 |
+| ---- | ---- |
+| `setTo` | 立即把目标设置到属性状态 |
+| `fromTo` | 从一组属性动画到另一组属性 |
+| `startGroup` | 启动一组对象/属性动画 |
+| `isFinished` | 查询动画是否结束 |
+| `cancel` | 取消动画 |
+| `getState` | 获取动画状态 |
+| `attr` | 单属性描述字段 |
+| `attrs` | 多属性描述字段 |
+| `onUpdate` | 更新回调 |
+| `onComplete` | 完成回调 |
+
+固件实现还确认：
+
+- `fromTo` 最终进入内部 `fromToInner`；
+- 配置支持 `ease` 和 `delay`，默认缓动痕迹为 `{ "ease": ["immediate", 0] }`；
+- 目标元素被删除时会报 `Folme element is removed or deleting.`；
+- 可动画属性至少包括 `scale-x/y`、`translate-x/y`、边框宽度/圆角、padding 和 margin 各方向属性。
+
+## 已确认的属性名
+
+```text
+scale-x              scale-y
+translate-x          translate-y
+border-width         border-top-width
+border-right-width   border-bottom-width
+border-left-width    border-radius
+padding-top          padding-right
+padding-bottom       padding-left
+margin-top           margin-right
+margin-bottom        margin-left
+```
+
+> 属性名必须使用连字符（kebab-case）形式，不能根据 CSS 习惯擅自改成 camelCase。
+
+## 参数对象
+
+```ts
+interface FolmeState {
+  attr: string
+  value?: number | string
+  [property: string]: unknown
+}
+
+interface FolmeConfig {
+  delay?: number
+  ease?: string | unknown[]
+  onUpdate?: (value: unknown) => void
+  onComplete?:  => void
+}
+
+interface FromToOptions extends FolmeConfig {
+  attr: string
+  fromState: FolmeState | object
+  toState: FolmeState | object
+}
+```
+
+`fromState`、`toState` 是原生实现强制读取的字段，动画对象还必须带框架分配的 unique identifier；普通 JS 对象无法伪造有效 DOM 元素句柄。预装汽车应用确认使用 `attr: 'scale'`、`fromState`、`toState`、`ease: 'cubic-bezier'`、`delay`、`onUpdate` 和 `onComplete`。
+
+## API
+
+### 方法职责与入参
+
+| 方法 | 可确认的职责 | 备注 |
+| ---- | ---- | ---- |
+| `setTo(target, toState)` | 立即把目标设置到 `toState` | 状态字段随属性类型变化 |
+| `fromTo(target, options)` | 按 `fromState` 到 `toState` 启动动画 | 返回值不应作为完成依据 |
+| `startGroup(group)` | 批量启动一组对象/属性动画 | 每项仍需有效元素 identifier |
+| `isFinished(target)` | 查询目标动画是否结束 | 返回布尔值 |
+| `cancel(target, attrs?)` | 取消目标全部或指定属性动画 | `attrs` 是属性名数组 |
+| `getState(target, attrs)` | 读取指定属性当前状态 | `attrs` 必须是字符串属性名 |
+
+### folme.fromTo(target, options) 示例
+
+固件明确解析 `ease` 与 `delay`，并包含默认片段：
+
+```js
+import folme from '@system.folme'
+
+// target 必须来自当前页面旧 UI 引擎，不能传 CSS selector。
+folme.fromTo(target, {
+  attr: 'scale',
+  fromState: { scale: 1 },
+  toState: { scale: 0.92 },
+  ease: 'cubic-bezier',
+  delay: 0,
+  onUpdate(value) {},
+  onComplete {}
+})
+```
+
+旧版本也保留 `{ ease: ['immediate', 0] }` 形式的内部默认配置；因此 `ease` 既可能是预设名，也可能是引擎参数数组。不同 UI 运行时不应混用。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **旧 UI 引擎专用**：Folme 是面向旧 UI 引擎对象的私有原生动画桥，`target` 必须是当前页面旧 UI 引擎分配的元素句柄（带框架 unique identifier），不能传 CSS selector，普通 JS 对象也无法伪造有效句柄。
+- **属性名格式**：必须使用连字符形式（如 `scale-x`、`border-top-width`），不可改用 camelCase。
+- **完成判定**：不要把 `fromTo` 的返回值作为动画完成依据；完成时机以 `onComplete` 回调或 `isFinished` 查询为准。
+- **元素删除**：目标元素被删除后操作会报 `Folme element is removed or deleting.`，页面销毁时应同步取消动画。
+- **推荐替代方案**：普通应用优先使用框架公开的 CSS transition、animation 或组件动画。只有在能从同版本预装快应用恢复真实调用点时，才应尝试 Folme，并同时记录目标对象来源、位置参数顺序、`attr/attrs` 形态、回调入参以及页面销毁行为。
+- 由于私有旧 Feature 没有可获取的 JIDL，不同属性的状态字段和值域仍需从同版本预装应用确认。调用前使用 `canIUse` 探测，并优先采用框架公开的 CSS/动画能力。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)

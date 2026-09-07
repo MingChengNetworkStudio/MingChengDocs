@@ -4,6 +4,7 @@
  * - wearpost: WearPost 腕上信驿（紫色）
  * - simplefetch: SimpleFetch 网络桥接（天蓝）
  * - mingcheng: 铭诚 API（琥珀）
+ * - vela: Vela 开发文档（靛蓝）
  */
 export function getSection(path: string | undefined): string | undefined {
   if (!path) return undefined;
@@ -19,6 +20,8 @@ export function getSection(path: string | undefined): string | undefined {
       return "simplefetch";
     case "mingcheng-api":
       return "mingcheng";
+    case "vela":
+      return "vela";
     default:
       return undefined;
   }

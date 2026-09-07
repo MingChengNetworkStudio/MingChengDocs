@@ -1,0 +1,73 @@
+---
+title: "OTA rcS"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 1652 字节  
+SHA-256 |  `f34f1f21a71cef93d02f1d0d92344ad5973bdb26749477c56ea5a3828699d07d`  
+阶段 | OTA 包验证与刷写调度  
+  
+## 挂载与恢复资源
+脚本首先挂载：
+
+  * `/dev/resource` → `/resource`，ROMFS；
+  * `/dev/nand_data` → `/data`，YAFFS `autoformat`。
+
+它检查 `/data` 挂载返回码，但只打印错误，不立即退出。随后启动 `system_trace`，并在 `/data/recovery` 不存在时从 `/resource/recovery` 复制恢复界面资源。
+
+## OTA 包存在性
+如果 `/data/ota.zip` 不存在，脚本调用 `miwear_recovery_ota 0`、重启并回到旧系统。这避免空 OTA 环境停留。
+
+## 进度属性
+脚本初始化：
+
+属性 | 初始值 | 用途  
+---|---|---  
+`ota.progress.size` |  `0` | 当前写入对象大小  
+`ota.progress.status` |  `0` | 更新状态  
+`ota.version.current` |  `0` | 当前更新版本/阶段  
+`ota.progress.current` |  `0` | 当前百分比/阶段点  
+`ota.progress.next` |  `15` | 下一进度节点  
+  
+`miwear_recovery_ota &` 在后台根据这些属性更新恢复 UI。
+
+## 签名验证
+
+```text
+
+
+
+zip_verify
+ /data/ota.zip
+ /etc/key.avb
+
+
+
+```
+
+失败时：
+
+  * 删除 `/data/ota.zip`；
+  * 设置 `ota.progress.current=-2`；
+  * 清除 `persist.ota.precheck.finished`；
+  * 重启。
+
+验证成功才把进度推进到 15，并以 zipfs 把包挂载到 `/ota`。挂载失败设置进度 `-3`、删除 ZIP 并重启。
+
+## 执行包内 ota.sh
+挂载成功后：
+
+  1. 创建 `/data/ota_tmp`；
+  2. 设置 `persist.ota.inprocess=1`；
+  3. 执行 `sh /ota/ota.sh > /dev/log`；
+  4. 读取 `ota.progress.current`，等于 100 才打印成功；
+  5. 无论成功与否都清除 `persist.ota.inprocess`；
+  6. 删除临时目录、OTA ZIP 和 `/data/mass/silent_ota`；
+  7. 退出，由外层恢复/引导流程处理重启。
+
+本包的 `ota.sh` 按 BL2 → Resource → AP 顺序使用 `dd ... verify` 写入分区。中途断电可能形成跨分区版本不一致，因此不应在低电量或供电不稳定时测试。
+
+## 修改与自定义包
+仅修改 ZIP 内 `ota.sh` 会使签名验证失败。要制作自定义 OTA，需要同时解决 ZIP 签名、`vela_ota.bin` 的 AVB 验证、分区大小和更早启动链。直接把 `zip_verify` 从脚本删除也没有解决 BL2 已执行的第一层验证。

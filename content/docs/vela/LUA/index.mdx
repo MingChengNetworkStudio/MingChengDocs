@@ -1,0 +1,54 @@
+---
+title: Lua 应用开发
+description: Vela 上的 Lua 5.4 运行时、LVGL UI 控件与 Vela 能力模块
+icon: Braces
+---
+
+Vela 的 Lua 运行时基于 **Lua 5.4**（NuttX 12.3.0 / Xiaomi Vela 环境），通过 LVGL 提供 UI 能力，并以模块化方式暴露设备能力（dataman 数据订阅、topic 消息、animengine 动画、vibrator 振动、navigator 导航等）。典型用途是**手表表盘**与轻量 Lua 应用。
+
+<Callout type="info">
+本分类为融合文档：以 Vela 官方 Lua 文档（docs-lua）为骨架（全部 API / 表格 / 示例完整保留），织入洛汐文档库（https://docs.luoxe.cn/ ）的实战内容，社区补充以「社区补充」小节标注。
+</Callout>
+
+## 目录
+
+### 入门
+
+- [概览](/docs/vela/LUA/introduction/overview) — 设备环境、模块生态、表盘场景、运行环境限制、最小表盘示例
+- [快速开始](/docs/vela/LUA/introduction/getting-started) — 第一个 Lua 应用、三步上手表盘
+- [文档约定](/docs/vela/LUA/introduction/conventions) — API 命名与使用约定、可用性标识
+
+### LVGL（UI 控件与模块）
+
+- [LVGL 概览与图形绑定](/docs/vela/LUA/LVGL/overview) — 控件体系 + Lua LVGL 绑定机制
+- **控件**：object 基础对象、label 文本、list 列表、roller 滚轮、image 图片、imagebar、imagelabel、imagelinebar、analogtime 指针时钟、curvedlabel 弧形文本、calendar 日历、checkbox、dropdown、keyboard、led、pointer、textarea、thumbnail
+- **模块**：disp 显示、fs 文件、group 输入组、indev 输入设备
+- **枚举**：align、dir、event、flag、flex_align、flex_flow、grid_align、key、keyboard_mode、label、part、roller_mode、scr_load_anim、scrollbar_mode、state
+- **全局函数与常量**：函数总览、Anim、Font、Style、Timer、HOR_RES、VER_RES、OPA、PCT、内置字体、常量
+
+### Lua 标准库
+
+- [标准库总览与 Vela 差异](/docs/vela/LUA/stdlib/overview)
+- globals、coroutine、debug、io、math、os、package、string、table
+
+### Vela 能力模块
+
+| 模块 | 能力 |
+| ---- | ---- |
+| activity | 页面状态管理（isShown） |
+| animengine | 属性动画引擎（x/y/rotate/opacity/scale） |
+| dataman | 数据订阅（subscribe/pause/resume） |
+| navigator | 页面导航（finish） |
+| screen | 屏幕控制 |
+| topic | 消息订阅（subscribe → unsubscribe/frequency） |
+| vibrator | 触觉反馈（start/cancel + 15 种模式） |
+
+### 实战
+
+- [Lua 表盘结构与生命周期](/docs/vela/LUA/guides/watchface) — 目录布局、main.lua、SCRIPT_PATH、生命周期、完整示例
+- [MiWear Lua 原生模块](/docs/vela/LUA/guides/miwear-native) — vendor modules 说明
+
+## 参考来源
+
+- Vela 官方 Lua 应用文档（docs-lua，Lua 5.4 / Vela 手表模拟器验证）
+- 洛汐文档库 https://docs.luoxe.cn/ （社区实战资料）

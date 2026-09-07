@@ -1,0 +1,272 @@
+---
+title: "system.digitalkey 数字车钥匙"
+---
+
+> 数字车钥匙系统桥，后端对接 DKF/ICCOA 服务、蓝牙栈和安全单元（SE）。可用于创建和激活车钥匙、处理 APDU、订阅车辆状态并发送远程无钥匙进入（RKE）动作。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.digitalkey` |
+| Feature 类型 | 社区/商业版资料，openvela 开源仓库未收录 |
+| 所需权限 | 文档未提及（安全关键接口，实际依赖车厂协议与帐号授权） |
+
+## 导入方式
+
+```js
+import digitalkey from '@system.digitalkey'
+```
+
+> **警告：这是安全关键接口。** 错误调用可能导致钥匙停用、删除、车辆连接中断或安全单元状态不一致。不要在没有车厂协议、帐号授权及恢复流程时调用写操作。
+
+## 功能概述
+
+`system.digitalkey` 是数字车钥匙（Digital Key）能力的 JS 桥接层，底层对接厂商 DKF（Digital Key Framework）/ICCOA 服务、蓝牙协议栈与安全单元。能力覆盖：
+
+- **服务与扫描**：读取 DKF 服务信息、扫描车辆蓝牙；
+- **蓝牙连接**：与车辆建立/断开蓝牙连接、查询连接状态；
+- **钥匙生命周期**：创建、启用、停用、删除车钥匙，读取激活数据与钥匙信息；
+- **安全单元 APDU**：向安全单元发送 APDU 指令、绑定车辆蓝牙 MAC；
+- **RKE 动作**：发送远程无钥匙进入（Remote Keyless Entry）动作；
+- **状态订阅**：订阅钥匙状态与车辆状态。
+
+## 回调约定
+
+除事件属性外，所有方法采用 options 对象和 `success/fail/complete` 回调：
+
+```ts
+interface Callbacks<T = object> {
+  success?: (data: T) => void
+  fail?: (data: object, code?: number) => void
+  complete?:  => void
+}
+```
+
+固件还注册了 `onscanresult`、`onconnect`、`ondisconnect`、`onkeyactive` 和 `onvehicleconnectionstatechange` 事件属性。预装应用主要使用订阅方法与 `onkeyactive`。
+
+## API
+
+### 服务与扫描
+
+#### digitalkey.getDkfInfo(options?)
+
+读取 DKF 服务和安全单元基础信息。预装应用从成功结果中使用 `dkAttestation`，并把它交给云端钥匙激活流程。
+
+**示例**
+
+```js
+digitalkey.getDkfInfo({
+  success(info) { console.log('DKF ready', Boolean(info)) },
+  fail(data, code) { console.error(code) }
+})
+```
+
+#### digitalkey.startScan(options) / digitalkey.stopScan
+
+```ts
+startScan(options: Callbacks & {
+  keyId: string
+  timeout?: number
+}): void
+
+stopScan: void
+```
+
+**参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| keyId | string | 是 | 钥匙 ID |
+| timeout | number | 否 | 扫描超时；原生实现校验 `timeout` 必须是数值 |
+
+扫描结果通过成功回调或 `onscanresult` 事件到达。
+
+### 蓝牙连接
+
+```ts
+connect(options: Callbacks & { address: string }): void
+disconnect(options: Callbacks & { address: string }): void
+getVehicleConnectionState(options: Callbacks & { keyId: string }): void
+```
+
+| 方法 | 关键参数 | 说明 |
+| ---- | ---- | ---- |
+| `connect` | `address`（必填） | 连接车辆蓝牙，`address` 是扫描得到的车辆蓝牙地址 |
+| `disconnect` | `address`（必填） | 断开与车辆的蓝牙连接 |
+| `getVehicleConnectionState` | `keyId`（必填） | 查询车辆连接状态 |
+
+连接状态还会通过 `onconnect`、`ondisconnect` 或车辆状态订阅回调更新。
+
+### 钥匙生命周期
+
+```ts
+createKey(options: Callbacks & {
+  vid?: string
+  vehicleId?: string
+  vehicleOEMId?: string
+}): void
+
+enableKey(options: Callbacks & { keyId: string }): void
+disableKey(options: Callbacks & { keyId: string }): void
+deleteKey(options: Callbacks & { keyId: string }): void
+getKeyActivedData(options: Callbacks & { keyId: string }): void
+getKeyInfo(options: Callbacks & { keyId?: string }): void
+```
+
+| 字段/方法 | 说明 |
+| ---- | ---- |
+| `vid` / `vehicleId` / `vehicleOEMId` | 创建钥匙的车辆标识；原生实现要求这组标识完整到足以定位车辆，预装应用同时传入 `vehicleId` 和 `vehicleOEMId` |
+| `enableKey` | 重新启用已存在的本地钥匙 |
+| `disableKey` | 暂停钥匙，不删除安全材料 |
+| `deleteKey` | 删除本地钥匙；通常还需同步云端状态 |
+| `getKeyActivedData` | 读取激活流程所需数据 |
+| `getKeyInfo` | 读取本地钥匙/安全单元信息；预装应用使用结果中的 `seCplc`/`cplc` |
+
+**示例**
+
+```js
+digitalkey.createKey({
+  vehicleId: 'vehicle-id-from-cloud',
+  vehicleOEMId: 'oem-id-from-cloud',
+  success(data) { console.log('created') },
+  fail(data, code) { console.error('createKey', code) }
+})
+```
+
+### 安全单元 APDU
+
+#### digitalkey.requestApplet(options)
+
+```ts
+requestApplet(options: Callbacks & {
+  data: string | ArrayBuffer
+}): void
+```
+
+`data` 必填。预装应用按云端下发的 APDU 序列逐项调用，并检查 `responseData` 与 `responseSw`。输入格式、分包和允许的 APDU 都由 DKF/车厂协议决定，不应使用任意命令探测安全单元。
+
+#### digitalkey.setVehicleBleMac(options)
+
+```ts
+setVehicleBleMac(options: Callbacks & {
+  keyId: string
+  mac: string
+}): void
+```
+
+`keyId` 和 `mac` 都必需，用于把云端/扫描取得的车辆蓝牙地址绑定到钥匙。
+
+### RKE 动作
+
+#### digitalkey.requestRKEAction(options)
+
+```ts
+requestRKEAction(options: Callbacks & {
+  keyId: string
+  functionId: number
+  actionId: number
+  isConsecutive?: boolean
+}): void
+```
+
+`keyId`、`functionId`、`actionId` 必需。固件还检查 `isConsecutive` 的类型。动作编号属于车辆协议，不能把不同品牌或车型的编号互换。
+
+**示例**
+
+```js
+digitalkey.requestRKEAction({
+  keyId,
+  functionId,
+  actionId,
+  isConsecutive: false,
+  success(data) { console.log('RKE accepted') },
+  fail(data, code) { console.error('RKE failed', code) }
+})
+```
+
+> 成功回调只说明请求被 DKF 接收；车辆是否执行还应从后续状态消息确认。
+
+### 状态订阅
+
+```ts
+subscribeKeyStatus(options: Callbacks & {
+  keyId: string
+  callback?: (status: object) => void
+}): void
+
+unsubscribeKeyStatus(options: { keyId: string } | string): void
+
+subscribeVehicleStatus(options: Callbacks & {
+  keyId: string
+  callback?: (status: object) => void
+}): void
+
+unsubscribeVehicleStatus(options: { keyId: string } | string): void
+```
+
+两个订阅均强制要求 `keyId`。预装应用从车辆状态中处理 `entityId`、`entityStatus`、`entityStatusUnit`、`timeStamp` 等字段；字段语义仍由车厂协议定义。
+
+**示例**
+
+```js
+digitalkey.subscribeVehicleStatus({
+  keyId,
+  callback(status) {
+    // 先按车辆协议检查时间戳与实体编号，再更新 UI。
+  }
+})
+
+// 页面销毁时
+digitalkey.unsubscribeVehicleStatus({ keyId })
+digitalkey.unsubscribeKeyStatus({ keyId })
+digitalkey.stopScan
+```
+
+## 事件属性
+
+| 事件属性 | 触发时机 |
+| ---- | ---- |
+| `onscanresult` | 车辆扫描有结果时 |
+| `onconnect` | 与车辆蓝牙连接建立时 |
+| `ondisconnect` | 与车辆蓝牙连接断开时 |
+| `onkeyactive` | 钥匙激活状态变化时（预装应用主要使用） |
+| `onvehicleconnectionstatechange` | 车辆连接状态变化时 |
+
+## 完整成员清单
+
+| 类别 | 成员 |
+| ---- | ---- |
+| 服务信息 | `getDkfInfo` |
+| 扫描/连接 | `startScan`、`stopScan`、`connect`、`disconnect`、`getVehicleConnectionState` |
+| 钥匙 | `createKey`、`enableKey`、`disableKey`、`deleteKey`、`getKeyActivedData`、`getKeyInfo` |
+| 安全单元/车辆 | `requestApplet`、`setVehicleBleMac`、`requestRKEAction` |
+| 订阅 | `subscribeKeyStatus`、`unsubscribeKeyStatus`、`subscribeVehicleStatus`、`unsubscribeVehicleStatus` |
+| 事件 | `onscanresult`、`onconnect`、`ondisconnect`、`onkeyactive`、`onvehicleconnectionstatechange` |
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **安全关键接口**：错误调用可能导致钥匙停用、删除、车辆连接中断或安全单元状态不一致；没有车厂协议、帐号授权及恢复流程时不要调用写操作（创建/启用/停用/删除钥匙、APDU、RKE 等）。
+- **协议私有性**：车辆标识（`vid`/`vehicleId`/`vehicleOEMId`）、APPDU 序列、RKE 的 `functionId`/`actionId` 编号、车辆状态字段语义均由 DKF/车厂协议定义，不同品牌或车型的编号不可互换；不要用任意 APDU 命令探测安全单元。
+- **RKE 成功语义**：`requestRKEAction` 的成功回调只表示请求被 DKF 接收，车辆是否实际执行需从后续状态消息确认。
+- **资源清理**：页面销毁时应停止扫描（`stopScan`）并退订钥匙/车辆状态，避免回调泄漏。
+- openvela Feature Framework 当前没有公开该厂商数字钥匙模块的 JIDL 或 C++ 实现，使用前建议用 `app.canIUse` 探测。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)

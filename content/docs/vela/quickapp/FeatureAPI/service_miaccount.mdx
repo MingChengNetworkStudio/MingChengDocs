@@ -1,0 +1,158 @@
+---
+title: "service.miaccount · 小米账户\""
+---
+
+> 社区/商业版资料，openvela 开源仓库未收录（无 JIDL 实证），内容来自洛汐文档库，API 以实际设备引擎为准。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `service.miaccount` |
+| Feature 类型 | 社区/商业版资料，开源仓库未收录 |
+
+## 导入方式
+
+```js
+const m = require('service.miaccount')
+```
+
+#  service.miaccount 
+
+小米帐号系统服务桥，用于扫码登录、取得 Service Token，并对小米帐号请求参数进行加解密。
+```text
+
+
+
+
+import
+ miaccount
+ from
+ '
+@service.miaccount
+'
+
+
+
+```
+
+这些方法采用快应用常见的 options + `success/fail/complete` 回调模型。回调数据会包含帐号标识、Token 或加密材料，不应写入日志。
+
+## 方法总览
+方法 | 关键参数 | 用途  
+---|---|---  
+`getUserId` | 无或回调对象 | 读取当前系统帐号用户 ID  
+`loginByScan` |  `serviceId` | 发起手表扫码登录  
+`getServiceToken` | `serviceId`、`accountType` | 读取已缓存的服务 Token  
+`refreshServiceToken` | `serviceId`、`accountType` | 强制刷新服务 Token  
+`setEnv` | `0` 或 `1` | 切换帐号服务环境  
+`getEnv` | 无 | 读取环境  
+`encryptRequestParams` | 加密参数对象 | 生成帐号协议要求的加密请求参数  
+`decryptResponseData` | `security`、`data` | 解密服务响应  
+  
+## 扫码登录
+
+```text
+
+interface LoginByScanOptions {
+  serviceId: string
+  cServiceId?: string
+  cBackUri?: string
+  loginCallback?: string
+  success?: (result: object) => void
+  fail?: (result: object, code?: number) => void
+  complete?:  => void
+}
+
+```
+
+`serviceId` 是原生实现强制检查的字段。预装汽车应用还传入当前业务的 `cServiceId`、回跳 URI 和登录回调地址。成功结果可包含登录 URL、二维码或过期时间；具体字段取决于帐号服务版本。
+```text
+
+
+miaccount.loginByScan({
+  serviceId: 'your-service-id',
+  cServiceId: 'your-client-service-id',
+  cBackUri: 'https://example.invalid/callback',
+  loginCallback: 'https://example.invalid/login-result',
+  success(result) {
+    // 用页面二维码组件展示 result 中的登录地址。
+  },
+  fail(data, code) { console.error(code) }
+})
+
+```
+
+## 用户与 Service Token
+
+```text
+
+getUserId(options?: Callbacks): void
+
+getServiceToken(options: {
+  serviceId: string
+  accountType?: string | number
+  success?: (result: ServiceTokenResult) => void
+  fail?: FailureCallback
+  complete?:  => void
+}): void
+
+refreshServiceToken(options: GetServiceTokenOptions): void
+
+```
+
+固件关联字段包括 `serviceToken`、`security`、`stsCookies` 和 `expireTime`。调用方必须按 `expireTime` 刷新，不要永久缓存 Token；`security` 是后续请求加解密材料，不是可展示字段。
+
+## 环境
+
+```text
+
+setEnv(env: 0 | 1): void
+getEnv(options?: Callbacks): void
+
+```
+
+原生实现只接受 `0` 或 `1`。它们分别代表哪个部署环境由产品配置决定，不能在没有真实配置表时写成“正式/预发”。修改环境会令已有登录态、Token 和服务器地址不匹配，只应由系统应用在初始化阶段设置。
+
+## 请求加解密
+
+```text
+
+encryptRequestParams(options: object): void
+
+decryptResponseData(options: {
+  security: string
+  data: string
+  success?: (plainText: string) => void
+  fail?: FailureCallback
+  complete?:  => void
+}): void
+
+```
+
+`encryptRequestParams` 的输入是待加密参数及当前帐号安全材料组成的对象；预装应用把返回结果进行 URI 编码后用于网络请求。`decryptResponseData` 强制要求 `security` 与 `data`。不要自行实现或替换其加密算法，系统帐号服务会管理密钥格式与轮换。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 获取源代码
+  * openvela Feature Framework 当前没有公开该厂商服务的 JIDL 或 C++ 实现。
+  * [Feature Framework 仓库](https://github.com/open-vela/frameworks_runtimes_feature)
+
+---
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)

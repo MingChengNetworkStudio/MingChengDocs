@@ -1,0 +1,199 @@
+---
+title: Object 基础对象
+description: 所有控件的基类：创建、属性、方法与事件
+---
+
+所有控件的基类。
+
+## 创建
+
+```lua
+local obj = lvgl.Object(parent, {
+  w = 100, h = 60,
+  align = { type = lvgl.ALIGN.CENTER }
+})
+```
+
+## 属性（`obj:set{}` / 创建时传入）
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `x`, `y` | integer | 坐标 |
+| `w`, `h` | integer | 尺寸。`lvgl.SIZE_CONTENT` 自适应 |
+| `align` | enum / table | `lvgl.ALIGN.*` 或 `{ type, x_ofs, y_ofs }` |
+| `bg_color` | integer | 背景色 `0xRRGGBB` |
+| `bg_opa` | integer | 背景不透明度 0–255 |
+| `bg_img_src` | string | 背景图路径 |
+| `radius` | integer | 圆角。`lvgl.RADIUS_CIRCLE` 满圆角 |
+| `border_width` | integer | 边框宽度 |
+| `border_color` | integer | 边框颜色 |
+| `outline_width` | integer | 轮廓宽度 |
+| `outline_color` | integer | 轮廓颜色 |
+| `outline_pad` | integer | 轮廓间距 |
+| `shadow_width` | integer | 阴影宽度 |
+| `shadow_color` | integer | 阴影颜色 |
+| `shadow_opa` | integer | 阴影不透明度 |
+| `shadow_ofs_x`, `shadow_ofs_y` | integer | 阴影偏移 |
+| `opa` | integer | 整体不透明度 0–255 |
+| `pad_all` | integer | 四方向内边距 |
+| `pad_top`, `pad_bottom`, `pad_left`, `pad_right` | integer | 单方向内边距 |
+| `pad_row`, `pad_column` | integer | 行/列间距（Flex/Grid） |
+| `text_color` | integer | 文字颜色 |
+| `transform_angle` | integer | 旋转角度（单位 0.1°，450 = 45°） |
+| `transform_zoom` | integer | 缩放（256 = 1x，512 = 2x） |
+| `clip_corner` | boolean | 裁剪圆角溢出 |
+| `blend_mode` | integer | 混合模式 |
+| `hidden` | boolean | 隐藏 |
+| `scrollable` | boolean | 可滚动 |
+| `flag_scrollable` | boolean | 滚动标志开关 |
+
+## 方法
+
+| 方法 | 说明 |
+|------|------|
+| `Anim` / `anim` | 创建动画 |
+| `add_flag` | 添加标志位 |
+| `add_state` | 添加状态 |
+| `add_style` | 添加样式 |
+| `align_to` | 相对于其他对象对齐 |
+| `center` | 将对象居中 |
+| `clean` | 删除所有子对象 |
+| `clear_flag` | 清除标志 |
+| `clear_state` | 清除状态 |
+| `delete` | 删除对象及其子对象 |
+| `get_child` | 获取指定索引的子对象 |
+| `get_child_cnt` | 获取子对象数量 |
+| `get_coords` | 获取绘制区域坐标 |
+| `get_parent` | 获取父对象 |
+| `get_pos` | 获取实际位置 |
+| `get_screen` | 返回所属屏幕对象 |
+| `get_state` | 获取当前状态值 |
+| `indev_search` | 根据坐标查找命中对象 |
+| `invalidate` | 标记对象重绘 |
+| `is_editable` | 判断是否可编辑 |
+| `is_group_def` | 判断是否为焦点组默认对象 |
+| `is_layout_positioned` | 判断是否参与布局定位 |
+| `is_scrolling` | 判断是否正在滚动 |
+| `is_visible` | 判断是否可见 |
+| `mark_layout_as_dirty` | 标记布局需重新计算 |
+| `onPressed` | 绑定按下事件回调 |
+| `onClicked` | 绑定点击事件回调 |
+| `onevent` | 注册指定事件回调 |
+| `parent` | 获取/设置父对象 |
+| `readjust_scroll` | 重新调整滚动位置 |
+| `remove_all_anim` | 移除所有动画 |
+| `remove_style` | 移除指定样式 |
+| `remove_style_all` | 移除所有样式 |
+| `scroll_by` | 按偏移滚动 |
+| `scroll_by_bounded` | 有边界的滚动 |
+| `scroll_by_raw` | 原始滚动（无动画） |
+| `scroll_to` | 滚动到指定坐标 |
+| `scroll_to_view` | 滚动到当前可见区域 |
+| `scroll_to_view_recursive` | 递归滚动到可见区域 |
+| `scrollbar_invalidate` | 刷新滚动条显示 |
+| `set` | 批量设置属性 |
+| `set_flex_align` | 设置 Flex 对齐方式 |
+| `set_flex_flow` | 设置 Flex 布局方向 |
+| `set_flex_grow` | 设置 Flex 伸展比例 |
+| `set_parent` | 设置父对象 |
+| `set_style` | 批量设置样式属性 |
+
+## 示例
+
+```lua
+local obj = lvgl.Object(nil, {
+  w = 200, h = 120,
+  align = { type = lvgl.ALIGN.CENTER },
+  bg_color = 0x00AAFF,
+  radius = 8,
+})
+
+obj:onClicked(function
+  print("Clicked!")
+end)
+
+obj:Anim {
+  run = true,
+  start_value = 0,
+  end_value = 200,
+  duration = 1000,
+  exec_cb = function(obj, v)
+    obj:set({ x = v })
+  end
+}
+```
+
+---
+
+## 社区补充（洛汐文档库）
+
+> 以下内容整理自洛汐文档库（https://docs.luoxe.cn/ ）。各控件的专属补充已拆分到对应控件文档，本节只保留 Object 通用约定与跨控件内容。
+
+### 创建语法
+
+控件有两种等价写法：
+
+```lua
+local image1 = lvgl.Image(parent, { src = "asset/a.bin" })
+local image2 = parent:Image { src = "asset/b.bin" }
+```
+
+所有控件都继承 Object：可在构造时传入属性，也可在创建后批量设置：
+
+```lua
+obj:set { x = 10, y = 20, hidden = false }
+```
+
+### Object 属性（分类速查）
+
+| 分类 | 属性 |
+|------|------|
+| 几何 | `x`、`y`、`w`、`h`、`align`、`min_width`、`max_width`、`min_height`、`max_height` |
+| 背景 | `bg_color`、`bg_opa`、`bg_img_src`、`bg_img_opa`、`bg_img_recolor`、`bg_img_recolor_opa`、`bg_img_tiled` |
+| 边框 | `border_width`、`border_color`、`border_opa`、`border_side`、`border_post` |
+| 外轮廓 | `outline_width`、`outline_color`、`outline_opa`、`outline_pad` |
+| 阴影 | `shadow_width`、`shadow_color`、`shadow_opa`、`shadow_ofs_x`、`shadow_ofs_y`、`shadow_spread` |
+| 内边距 | `pad_all`、`pad_top`、`pad_bottom`、`pad_left`、`pad_right`、`pad_row`、`pad_column`、`pad_gap` |
+| 变换 | `transform_zoom`、`transform_angle`、`transform_pivot_x`、`transform_pivot_y`、`translate_x`、`translate_y` |
+| 文本 | `text_color`、`text_opa`、`text_font`、`text_letter_space`、`text_line_space`、`text_decor`、`text_align` |
+| 其他 | `radius`、`opa`、`clip_corner`、`blend_mode`、`scrollbar_mode`、`scroll_snap_x`、`scroll_snap_y` |
+
+其中上文属性表未列出的补充属性包括：`min_width`/`max_width`/`min_height`/`max_height`（尺寸约束）、`bg_img_opa`/`bg_img_recolor`/`bg_img_recolor_opa`/`bg_img_tiled`（背景图混合）、`border_opa`/`border_side`/`border_post`、`outline_opa`、`shadow_spread`、`pad_gap`、`transform_pivot_x`/`transform_pivot_y`（变换轴心）、`translate_x`/`translate_y`（平移）、`text_opa`/`text_font`/`text_letter_space`/`text_line_space`/`text_decor`/`text_align`（文本样式）、`scrollbar_mode`/`scroll_snap_x`/`scroll_snap_y`（滚动）。这些属性均可在构造时或 `obj:set{}` 中使用。
+
+### Object 方法（分类速查）
+
+| 分类 | 方法 |
+|------|------|
+| 生命周期 | `delete`、`clean`、`get_parent`、`set_parent`、`get_child`、`get_child_cnt`、`get_screen` |
+| 样式 | `set_style`、`add_style`、`remove_style`、`remove_style_all` |
+| 几何 | `align_to`、`center`、`invalidate`、`get_coords`、`get_pos` |
+| 状态 | `get_state`、`add_flag`、`clear_flag`、`add_state`、`clear_state`、`is_visible` |
+| 滚动 | `scroll_to`、`scroll_by`、`scroll_by_bounded`、`scroll_by_raw`、`scroll_to_view`、`scroll_to_view_recursive`、`is_scrolling`、`readjust_scroll` |
+| 布局 | `set_flex_flow`、`set_flex_align`、`set_flex_grow`、`mark_layout_as_dirty`、`is_layout_positioned` |
+| 事件 | `onevent`、`onPressed`、`onClicked`、`indev_search` |
+| 动画 | `anim` / `Anim`、`remove_all_anim` |
+
+### 事件示例
+
+```lua
+button:onClicked(function(obj, code)
+  print("clicked", obj, code)
+end)
+
+button:onevent(lvgl.EVENT.PRESSED, function(obj, code)
+  print("pressed", code)
+end)
+```
+
+### 机型可用性
+
+| Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|------|------|
+| ✅ | ✅ |
+
+### 获取源代码
+
+- [社区 LVGL 控件文档](https://github.com/FangAiden/Vela_Application_Documentation/tree/main/docs-lua/lvgl/widgets)
+- [LVGL Widgets 文档](https://docs.lvgl.io/master/details/widgets/)
+
+参考来源：官方 docs-lua / 洛汐文档库 https://docs.luoxe.cn/

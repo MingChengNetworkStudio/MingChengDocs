@@ -1,0 +1,69 @@
+---
+title: "AP rcS"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 289 字节  
+SHA-256 |  `2aa992437f4f52fbda7e0884701e6044ecb269d942696ced0d0654c9c3743f0a`  
+阶段 | AP 业务服务启动  
+  
+## 错误处理
+脚本先执行 `set +e`，随后立刻执行 `set -e`，因此最终生效的是遇错退出。某个前台命令失败可能阻止后续服务启动；带 `&` 的后台进程启动失败通常不会像同步命令那样提供可靠状态。
+
+## `/data/nobusiness` 总开关
+脚本只有在 `/data/nobusiness` 不是目录时才启动主要业务：
+```text
+
+
+if [ ! -d /data/nobusiness ];then
+  # 主要业务服务
+fi
+
+```
+
+这个目录相当于维修/无业务模式开关。它存在时会一起停掉产品映射、蓝牙业务、健康、MiConnect、振动等服务，但脚本末尾的 `at_cmd` 仍会启动。
+
+## 服务解释
+命令 | 作用 | 影响的上层能力  
+---|---|---  
+`miwear_product_load` | 根据 `miwear_product.json` 加载型号/PID | 设备身份、配对、地区能力  
+`bluetoothd` | 蓝牙核心 daemon | BLE/连接  
+`miwear_bluetooth` | MiWear 蓝牙业务层 | 手机配对与数据同步  
+`miwear_algo_service` | 穿戴算法服务 | 运动/健康算法  
+`miwear_activity_service` | Activity/Service 桥 |  `system.internal.activity`  
+`miwear_capture_service` | 捕获/采集服务 | 截图、采集或诊断类能力  
+`nfc_stack_bridge` | NFC 协议栈桥 | 门卡/支付/NFC 应用  
+`miconnect` | 小米互联通信，输出重定向到 `/dev/log` | 消息中心、互联  
+`miwear` | 穿戴主业务进程 | UI 和系统业务协调  
+`charger_manage` | 充电状态管理 | 电池/充电 UI 与策略  
+`vibratord` | 振动服务 |  `system.vibrator`  
+`healthd` | 健康数据服务 | `service.health`、系统健康应用  
+`at_cmd` | AT/诊断命令服务 | 调试、工厂或售后通信  
+  
+## 修改方案
+若 `/data/nobusiness` 误存在，优先改名后重启，不必修改 ROMFS：
+```text
+
+
+mv /data/nobusiness /data/nobusiness.disabled
+sync
+reboot
+
+```
+
+若只想恢复一个服务，可在 shell 中确认没有同名进程后手动启动，例如 `healthd &`。永久改脚本需要重建 AP 内嵌 ROMFS，并同步处理镜像校验。
+
+## o63 服务差异
+o63 的 `rcS` 使用 `set +e`，不会因单个服务失败立即终止。启动顺序是：
+
+  1. `sensor_middle_service`；
+  2. `nfc_stack_bridge`；
+  3. `miconnect`；
+  4. `dkf_iccoa`；
+  5. 若不存在 `/data/nobusiness`，启动 `miwear` 与 `miwear_algo_service`；
+  6. 根据 `/data/nolowpower`、`/data/logmaskr` 调整电源/日志；
+  7. 启动 `account`。
+
+`dkf_iccoa` 与 `account` 位于 `nobusiness` 条件之外，因此创建该目录不会关闭数字钥匙和帐号 daemon；这与 p67tc “大量业务一起停掉”的行为不同。o63 也没有在脚本中单独启动 `healthd`、`miwear_capture_service` 或 `vibratord`，相应能力可能已合入主进程/算法服务或由其他启动机制提供，不能照抄 p67tc 的手动启动命令。

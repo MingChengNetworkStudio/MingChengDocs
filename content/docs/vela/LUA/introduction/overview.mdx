@@ -1,0 +1,160 @@
+---
+title: 概览
+description: Vela Lua 表盘运行环境、模块生态、标准库与最小表盘示例
+---
+
+Xiaomi Vela 穿戴设备提供 Lua 5.4 表盘运行环境：脚本通过 `lvgl` 创建界面，通过 `dataman` 订阅时间、健康、天气和系统数据，通过 `animengine` 或 LVGL 动画驱动效果。本分区文档主要来源于工程源码、镜像分析与运行时验证。
+
+## 设备环境
+
+| 项目 | 值 |
+|------|------|
+| 操作系统 | NuttX 12.3.0 (Xiaomi Vela) |
+| Lua 版本 | 5.4.0 |
+| 分辨率 | 466 × 466（圆形） |
+| 验证平台 | Vela 手表模拟器 |
+
+## Lua 模块
+
+| 模块 | 说明 | 状态 |
+|------|------|------|
+| **lvgl** | UI 控件系统（11 个控件 + disp/fs/group/indev 子模块） | ✅ |
+| **dataman** | 数据订阅（subscribe/pause/resume） | ✅ |
+| **topic** | 消息订阅（subscribe → unsubscribe/frequency） | ✅ |
+| **activity** | 页面状态管理（isShown） | ✅ |
+| **animengine** | 属性动画引擎（x/y/rotate/opacity/scale） | ✅ |
+| **navigator** | 页面导航（finish） | ✅ |
+| **vibrator** | 触觉反馈（start/cancel + 15 种模式） | ✅ |
+| **screen** | 屏幕控制 | ❌ 空表 |
+
+### 社区补充：模块生态与加载方式
+
+Vela 的 Lua 能力以**宿主注入模块**的形式提供。表盘脚本顶部通常统一 `require` 以下最小模块集：
+
+```lua
+local lvgl = require("lvgl")
+local dataman = require("dataman")
+local topic = require("topic")
+local activity = require("activity")
+local animengine = require("animengine")
+local navigator = require("navigator")
+local vibrator = require("vibrator")
+local screen = require("screen")
+```
+
+实战注意：
+
+- 模块与 Lua state 由**表盘宿主**创建，不能在快应用 RPK 中直接 `require`；
+- `screen` 当前返回空表；屏幕状态由宿主内部处理，**不应假定存在** `screen.ON`、`screen.OFF` 等常量；
+- 动态库加载已关闭，不能用 `package.loadlib` 加载 `.so`（详见下文[运行环境限制](#社区补充实战提示与运行环境限制)）。
+
+## Lua 标准库
+
+| 模块 | 状态 | 备注 |
+|------|------|------|
+| `io` | ✅ | `io.open` 读写可用，`io.popen` 不可用 |
+| `os` | ✅ | `os.execute` 可用，`os.time`/`os.date`/`os.clock` 可用 |
+| `debug` | ✅ | `getregistry`/`getinfo`/`traceback` 等完整可用 |
+| `math` | ✅ | 完整 |
+| `string` | ✅ | 完整 |
+| `table` | ✅ | 完整 |
+| `coroutine` | ✅ | 完整 |
+| `utf8` | ✅ | 完整 |
+| `package` | ✅ | `require`/`loadfile`/`dofile` 均可用 |
+
+## 系统命令
+
+通过 `os.execute` 可调用 shell 命令。详见 [NuttX Shell 命令参考](/docs/vela/appendix/shell/index)。
+
+<Callout type="warn">
+`io.popen` 不可用。需要捕获命令输出时，用 `os.execute("cmd > /tmp/out.txt")` 后 `io.open("/tmp/out.txt")` 读取。
+</Callout>
+
+## 社区补充：表盘开发场景
+
+表盘包通常由**入口脚本、资源目录和样式资源**组成。资源路径可使用绝对路径，也可由宿主注入的 `SCRIPT_PATH` 拼接：
+
+```lua
+local function asset(name)
+  return SCRIPT_PATH .. name
+end
+```
+
+### 最小表盘
+
+下面是一个可运行的最小表盘：创建全屏根对象与居中时间标签，订阅 `timeHour` 数据更新显示，并在页面暂停/恢复时统一暂停/恢复订阅：
+
+```lua
+local lvgl = require("lvgl")
+local dataman = require("dataman")
+
+local ui = {}
+local tokens = {}
+
+function ui.init(style)
+  local root = lvgl.Object(nil, {
+    w = lvgl.HOR_RES,
+    h = lvgl.VER_RES,
+    bg_color = 0x000000,
+    bg_opa = 255,
+    border_width = 0,
+    pad_all = 0,
+  })
+
+  root:clear_flag(lvgl.FLAG.SCROLLABLE)
+
+  local label = root:Label {
+    text = "--:--",
+    align = lvgl.ALIGN.CENTER,
+    text_color = 0xFFFFFF,
+  }
+
+  tokens[#tokens + 1] = dataman.subscribe(
+    "timeHour",
+    label,
+    function(obj, value)
+      obj:set { text = string.format("%02d", value // 256) }
+    end
+  )
+
+  ui.root = root
+  return root
+end
+
+function pageOnPause
+  for _, token in ipairs(tokens) do dataman.pause(token) end
+end
+
+function pageOnResume
+  for _, token in ipairs(tokens) do dataman.resume(token) end
+end
+
+return ui
+```
+
+### 生命周期
+
+| 函数 | 调用时机 | 应做的工作 |
+|------|----------|------------|
+| `ui.init(style)` | 创建表盘 | 创建根对象、控件、订阅与动画 |
+| `pageOnPause` | 表盘隐藏或进入编辑态 | 暂停定时器和订阅、移除动画 |
+| `pageOnResume` | 表盘重新显示 | 恢复订阅、计时和必要动画 |
+
+<Callout type="warn">
+页面退出后不要继续持有 LVGL userdata。定时器、动画、topic、文件和目录句柄都应主动停止或关闭。
+</Callout>
+
+## 社区补充：实战提示与运行环境限制
+
+- Lua 版本为 5.4.0；
+- 动态库加载关闭，不能用 `package.loadlib` 加载 `.so`；
+- `io.popen` 不可用（捕获命令输出的替代方案见上文[系统命令](#系统命令)）；
+- 模块与 Lua state 由表盘宿主创建，不能在快应用 RPK 中直接 `require`；
+- 文件读写受进程权限和挂载属性限制；
+- 运行复杂探测代码时，优先放到**按钮事件**或**短周期定时器**中，避免初始化失败导致整个表盘无法显示（与[文档约定](/docs/vela/LUA/introduction/conventions)的要求一致）。
+
+## 参考来源
+
+- 官方文档：docs-lua《概览》（来源于工程源码、镜像分析与运行时验证）
+- 洛汐社区文档库：《Lua 表盘开发总览》（[https://docs.luoxe.cn/docs/vela/lua/](https://docs.luoxe.cn/docs/vela/lua/)）
+- 延伸参考：[Lua 5.4 参考手册](https://www.lua.org/manual/5.4/manual.html)、[LVGL 源码](https://github.com/lvgl/lvgl)

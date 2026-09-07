@@ -1,0 +1,186 @@
+---
+title: "system.media 多媒体"
+---
+
+> 提供图片预览能力：在全屏预览界面中查看一张或多张图片，支持指定当前显示图片。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.media` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import media from '@system.media'
+// 本仓库运行时/测试中使用的写法
+const media = require('system.media')
+```
+
+## 功能概述
+
+`system.media` 当前提供**图片预览**能力：调用 `previewImage` 后，Native 侧通过 ferry GUI 框架创建一个 `media` 预览 widget，设置当前图片路径与屏幕形状（圆形/方形，取自 `ash::DeviceInfo::screenShape`），调用 `show` 弹出全屏图片预览界面；用户关闭预览后触发 complete 回调。
+
+「社区补充（洛汐文档库）」：注意模块边界——官网目录中的 `system.audio` 是音频播放；这里的 `system.media` 是**独立的图片预览 feature**，二者不要混用。
+
+图片路径经 `ferry::transformUrlPathHelper` 结合应用包名/包路径转换，支持应用包内资源路径与 `internal://` 等 URI（具体以 ferry 路径转换规则为准）。预览界面的成功、失败、完成事件由 GUI widget 的 `EVENT_BIT_MEDIA_SUCCESS` / `EVENT_BIT_MEDIA_FAIL` / `EVENT_BIT_MEDIA_COMPLETE` 事件回调到 JS。
+
+> 说明：JIDL 中本模块仅声明了 `previewImage` 一个方法；音频播放/录音等能力不在本模块中。
+
+## API
+
+### media.previewImage(info)
+
+弹出图片预览界面预览图片。异步模型：**回调风格**（success/fail/complete，JIDL 无 Promise 声明）。
+
+「社区补充（洛汐文档库）」对回调语义的说明：`success` 表示预览界面已**成功调起**，不代表用户已看完图片；`complete` 在成功或失败路径之后都会执行；JIDL 中三个回调均不携带成功数据。
+
+**参数（PreviewImageInfo）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| current | object | 否 | `null` | 当前要显示的图片：可为 `uris` 中的**索引**（number）或 **URI 字符串**（string）；传 `null`/不传/空字符串 `''` 时默认显示 `uris[0]` |
+| uris | string[] | 是 | - | 要预览的图片 URI 列表；列表为空会直接 fail |
+| success | function | 否 | - | 成功回调，无参数 `` |
+| fail | function | 否 | - | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 否 | - | 结束回调，无参数 ``；无论成功失败都会执行 |
+
+> 社区补充（洛汐文档库）描述：`current` 在 JIDL 中故意定义为宽泛的 `object`，"精确形态未固定"，旧实现可能接受索引、URI 或媒体项对象，但当前固件样本的 JIDL 没有给出契约；最稳妥的调用是省略它或传 `null`，若要指定当前图应分别真机测试 `0`、URI 字符串和对象形态，不能把任一种写成跨固件保证。
+
+**成功返回 / success 回调参数**
+
+无参数。预览界面成功弹出时由 GUI 成功事件触发。
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`（JIDL：`callback fail_cb(string errorMsg, int code)`）
+- 参数校验失败时 Native 固定返回：
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"previewImage failed"` | `uris` 为空数组 |
+| 202 | `"previewImage failed"` | `current` 为数字索引但越界（`< 0` 或 `>= uris.length`） |
+| 202 | `"previewImage failed"` | `current` 为字符串但在 `uris` 数组中找不到完全相同的项 |
+| 202 | `"previewImage failed"` | `current` 类型不是 number / string / null |
+
+> 注：GUI widget 运行时触发的失败事件（`EVENT_BIT_MEDIA_FAIL`）在当前实现中调用 fail 回调时**不带参数**；仅上述参数校验路径会传入 `"previewImage failed"` 和 202。
+
+**示例**
+
+```js
+const media = require('system.media')
+
+// 1) 不传 current：默认显示第一张
+media.previewImage({
+  uris: [
+    'internal://files/photos/1.jpg',
+    'internal://files/photos/2.jpg'
+  ],
+  success: function  {
+    console.log('previewImage success')
+  },
+  fail: function (errorMsg, code) {
+    console.log('previewImage fail', code, errorMsg)
+  },
+  complete: function  {
+    console.log('previewImage complete')
+  }
+})
+
+// 2) current 传索引（number）
+media.previewImage({
+  current: 1,
+  uris: [
+    'internal://files/photos/1.jpg',
+    'internal://files/photos/2.jpg'
+  ],
+  success: function  {},
+  fail: function (errorMsg, code) {},
+  complete: function  {}
+})
+
+// 3) current 传 URI 字符串（必须与 uris 中某项完全一致）
+media.previewImage({
+  current: 'internal://files/photos/2.jpg',
+  uris: [
+    'internal://files/photos/1.jpg',
+    'internal://files/photos/2.jpg'
+  ],
+  success: function  {},
+  fail: function (errorMsg, code) {},
+  complete: function  {}
+})
+```
+
+「社区补充（洛汐文档库）」给出的稳妥封装示例：调用前过滤空 URI 并确认列表非空，回调中区分"界面调起"与"请求结束"：
+
+```js
+function previewImages(uris) {
+  const valid = uris.filter(uri => typeof uri === 'string' && uri.length > 0)
+  if (!valid.length) throw new Error('no image uri')
+
+  media.previewImage({
+    uris: valid,
+    success:  => console.log('preview opened'),
+    fail: (message, code) => console.error(code, message),
+    complete:  => console.log('preview request completed')
+  })
+}
+```
+
+## 数据结构
+
+### PreviewImageInfo
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| current | object（number \| string \| null） | 当前显示图片的索引或 URI；默认 `null`，表示 `uris[0]` |
+| uris | string[] | 图片 URI 列表，不可为空 |
+| success | function | 成功回调，`` |
+| fail | function | 失败回调，`(errorMsg: string, code: number)` |
+| complete | function | 结束回调，`` |
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 注意事项
+
+- **uris 不能为空**：空数组直接以 code 202、`"previewImage failed"` 失败。「社区补充（洛汐文档库）」也建议在调用前过滤空字符串并确认 `uris.length > 0`。
+- **current 的三种形态**：
+  - 不传 / `null` / 空字符串 `''`：使用 `uris[0]`；
+  - number：作为 `uris` 的下标，越界（负数或超出长度）直接 fail（202）；
+  - string：必须与 `uris` 中某个元素**完全相等**，否则 fail（202）；
+  - 其他类型（boolean、object 等）直接 fail（202）。
+- **URI 访问权限**（「社区补充（洛汐文档库）」）：URI 应是快应用有权读取的本地/内部 URI（如 `internal://`）；普通文件系统绝对路径可能被沙箱拒绝。
+- **大图与格式**（「社区补充（洛汐文档库）」）：大图是否缩放、缓存策略以及支持的图片格式由系统媒体实现决定。
+- **占位图兜底**：`uris` 数组中若存在 `null` 元素，Native 不报错，而是将该项替换为内部占位标识（`"valError"`），预览时显示默认占位图。
+- **屏幕形状适配**：Native 会读取设备屏幕形状（`ash::DeviceInfo::screenShape`，如圆形手表屏）并传给预览 widget 做适配。
+- **线程模型**：参数校验在 Feature 线程完成，实际的 widget 创建与显示通过 `postUITask` 切换到 UI 线程执行；widget 事件再经 TaskRunner 切回 Feature 线程触发 JS 回调。
+- **当前实现限制**：Native 只把 `current` 对应的单张图片路径传给 GUI 层（代码注释标记 todo：`uris` 数组整体与数字索引下传尚未实现）；是否支持左右滑动浏览多图取决于 GUI `media` widget 的实现，具体行为以 Native 实现为准。
+- **不要与 `system.audio` 混用**（「社区补充（洛汐文档库）」）：`system.media` 仅负责图片预览，音频播放属于 `system.audio`。
+- Feature 实例销毁（detach）时，Native 会自动释放预览 widget 并移除全部 JS 回调。
+
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

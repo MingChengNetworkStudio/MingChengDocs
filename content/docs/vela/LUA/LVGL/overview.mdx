@@ -1,0 +1,167 @@
+---
+title: LVGL 概览
+description: luavgl 控件体系、可用控件、对象通用方法与 Lua LVGL 绑定机制
+---
+
+`luavgl` 是对 LVGL 核心函数和组件的 Lua 封装。
+
+<Callout type="warn">
+在实机上测试未知特性时，请在按钮回调中触发测试代码，避免程序启动时直接运行导致 Panic 循环重启。
+</Callout>
+
+## 可用控件 ✅
+
+| 控件 | 说明 |
+|------|------|
+| **Object** | 基类对象（47 个方法） |
+| **Label** | 文本标签 |
+| **Image** | 图片（支持 `.bin` 格式） |
+| **Checkbox** | 复选框 |
+| **Dropdown** | 下拉选择 |
+| **Roller** | 滚轮选择 |
+| **Textarea** | 文本输入 |
+| **Led** | LED 指示灯 |
+| **Calendar** | 日历 |
+| **List** | 列表 |
+| **Keyboard** | 键盘 |
+
+## 不可用控件 ❌
+
+Arc、Bar、Slider、Switch、Spinner、Meter、Chart、Line、Btnmatrix、Table 等均未注册，调用返回 `nil`。
+
+---
+
+## 社区补充（洛汐文档库）：Lua LVGL 图形绑定
+
+MiWear Lua 宿主提供 LVGL Lua 绑定。以下是公共对象方法与模块索引；控件属性见 [Object 基础对象](/docs/vela/LUA/LVGL/widgets/object)，样式与动画见 [Style 样式](/docs/vela/LUA/LVGL/globals/functions/Style) 与 [Anim 动画](/docs/vela/LUA/LVGL/globals/functions/Anim)，辅助模块见 [disp 显示](/docs/vela/LUA/LVGL/modules/disp)。
+
+### 对象与组件
+
+标准对象类型：`Object`、`Image`、`Label`、`Led`、`List`、`Textarea`、`Calendar`、`Checkbox`、`Dropdown`、`Keyboard`、`Roller`。
+
+扩展组件：`Pointer`、`AnalogTime`、`ImageLabel`、`ImageBar`、`CurvedLabel`、`Thumbnail`、`ImageLineBar`、`imggroup`、`frameanim`、`xcanvas`。
+
+### Object 通用方法
+
+| 类别 | 方法 |
+|---|---|
+| 树与生命周期 | `delete`、`clean`、`set_parent`、`get_parent`、`get_child`、`get_child_cnt`、`get_screen` |
+| 几何与布局 | `set_style`、`align_to`、`center`、`invalidate`、`get_coords`、`get_pos`、`mark_layout_as_dirty`、`is_layout_positioned` |
+| 状态与 flag | `get_state`、`add_flag`、`clear_flag`、`add_state`、`clear_state`、`is_visible`、`is_editable`、`is_group_def` |
+| 样式 | `add_style`、`remove_style`、`remove_style_all` |
+| 滚动 | `scroll_to`、`is_scrolling`、`scroll_by`、`scroll_by_bounded`、`scroll_to_view`、`scroll_to_view_recursive`、`scroll_by_raw`、`scrollbar_invalidate`、`readjust_scroll` |
+| Flex | `set_flex_flow`、`set_flex_align`、`set_flex_grow` |
+| 输入/事件 | `indev_search`、`onevent`、`onPressed`、`onClicked` |
+| 动画 | `anim`、`remove_all_anim` |
+
+通用形态示例：
+
+```lua
+obj:set_parent(parent)
+obj:align_to(base, align, x_offset, y_offset)
+obj:scroll_to(x, y, anim_enable)
+obj:add_flag(lvgl.FLAG.CLICKABLE)
+obj:clear_state(lvgl.STATE.DISABLED)
+obj:onevent(event_code, callback)
+```
+
+### 组件专用方法
+
+| 对象 | 方法 |
+|---|---|
+| Image | `set_src`、`set_offset`、`set_pivot`、`get_img_size` |
+| Label | `set_text_static`、`get_text`、`get_long_mode`、`ins_text`、`cut_text` |
+| Led | `on`、`off`、`toggle`、`get_brightness` |
+| List | `add_text`、`add_btn`、`get_btn_text` |
+| Calendar | `set`、`get_today`、`get_showed`、`get_pressed`、`get_btnm` |
+| Dropdown | `get_options`、`get_selected`、`get_selected_str`、`get_options_cnt`、`is_open`、`add_option`、`clear_option` |
+| Textarea | `get_text`、`remove_prop` |
+| Frame animation | `set`、`pause`、`resume`、`delete`、`ready` |
+
+大量属性由统一 `set`/property 描述器处理。已确认的属性包括 `text`、`placeholder`、`long_mode`、`selected`、`visible_cnt`、`password_mode`、`password_bullet`、`accepted_chars`、`max_length`、`angle`、`zoom`、`pivot`、`offset_x`、`offset_y`、`recolor`、`img_opa`、`radius`、`bar_width` 等。
+
+### 屏幕与显示模块
+
+| 成员 | 说明 |
+|---|---|
+| `lvgl.disp.get_default` | 默认显示设备 |
+| `lvgl.disp.get_next` | 遍历显示设备 |
+| `lvgl.disp.get_scr_act` | 当前活动 screen |
+| `lvgl.disp.get_scr_prev` | 上一个 screen |
+| `lvgl.disp.load_scr` | 切换 screen |
+| `display:get_layer_top` | 顶层 layer |
+| `display:get_layer_sys` | 系统 layer |
+| `display:set_bg_color` | 设置背景色 |
+| `display:set_bg_image` | 设置背景图 |
+| `display:set_bg_opa` | 设置背景透明度 |
+| `display:get_chroma_key_color` | 获取色键 |
+| `display:set_rotation` | 设置显示旋转 |
+
+没有确认到公开 Lua `take_snapshot` 方法。系统截屏方式见 [系统截图](/docs/vela/appendix/firmware/system_screenshot)。
+
+### 输入设备
+
+| 方法 | 说明 |
+|---|---|
+| `get_type` | 输入设备类型 |
+| `reset`、`reset_long_press` | 重置状态 |
+| `set_cursor` | 设置指针光标 |
+| `set_group` | 绑定 group |
+| `get_point` | 当前坐标 |
+| `get_gesture_dir` | 手势方向 |
+| `get_key` | 当前键值 |
+| `get_scroll_dir`、`get_scroll_obj` | 滚动信息 |
+| `get_vect` | 输入向量 |
+| `wait_release` | 等待释放 |
+| `on_event` | 注册输入事件 |
+
+### Group
+
+模块方法：`get_default`、`create`。对象方法：`delete`、`set_default`、`add_obj`、`remove_obj`、`remove_objs`、`focus_obj`、`focus_next`、`focus_prev`、`focus_freeze`、`send_data`、`set_focus_cb`、`set_edge_cb`、`get_focus_cb`、`get_edge_cb`、`set_editing`、`set_wrap`、`get_wrap`、`get_obj_count`、`get_focused`。
+
+### 文件/目录 userdata
+
+| 类型 | 方法 |
+|---|---|
+| 目录 | `lvgl.fs.open_dir`、`read`、`close` |
+| 文件 | `lvgl.fs.open_file`、`read`、`write`、`seek`、`close` |
+
+两类 userdata 都实现 `__gc`、`__close`、`__tostring`、`__index`，可配合 Lua 5.4 to-be-closed 变量使用，但仍建议显式关闭。
+
+### 常量组
+
+固件导出以下常量组/值：
+
+- Object flags：`HIDDEN`、`CLICKABLE`、`CLICK_FOCUSABLE`、`CHECKABLE`、`SCROLLABLE`、`SCROLL_ELASTIC`、`SCROLL_MOMENTUM`、`SCROLL_ONE`、`SCROLL_CHAIN_HOR/VER`、`SCROLL_CHAIN`、`SCROLL_ON_FOCUS`、`SCROLL_WITH_ARROW`、`SNAPPABLE`、`PRESS_LOCK`、`EVENT_BUBBLE`、`GESTURE_BUBBLE`、`ADV_HITTEST`、`IGNORE_LAYOUT`、`FLOATING`、`OVERFLOW_VISIBLE`、`LAYOUT_1/2`、`WIDGET_1/2`、`USER_1..4`；
+- States/parts：`CHECKED`、`FOCUS_KEY`、`EDITED`、`HOVERED`、`SCROLLED`、`DISABLED`、`SCROLLBAR`、`INDICATOR`、`KNOB`、`SELECTED`、`ITEMS`、`TICKS`、`CURSOR`、`CUSTOM_FIRST`；
+- Align：`CENTER` 以及 `OUT_TOP_LEFT/MID/RIGHT`、`OUT_BOTTOM_LEFT/MID/RIGHT`、`OUT_LEFT_TOP/MID/BOTTOM`、`OUT_RIGHT_TOP/MID/BOTTOM`；
+- Label：`LONG_WRAP`、`LONG_DOT`、`LONG_SCROLL`、`LONG_SCROLL_CIRCULAR`、`LONG_CLIP`；
+- Flex：`COLUMN`、`ROW_WRAP`、`ROW_REVERSE`、`ROW_WRAP_REVERSE`、`COLUMN_WRAP`、`COLUMN_REVERSE`、`COLUMN_WRAP_REVERSE`、`SPACE_EVENLY`、`SPACE_AROUND`、`SPACE_BETWEEN`、`STRETCH`；
+- 动画：`OVER_LEFT/RIGHT/TOP/BOTTOM`、`MOVE_LEFT/RIGHT/TOP/BOTTOM`、`FADE_IN`、`FADE_ON`、`FADE_OUT`、`OUT_LEFT/RIGHT/TOP/BOTTOM`；
+- 特殊值：`ANIM_REPEAT_INFINITE`、`ANIM_PLAYTIME_INFINITE`、`SIZE_CONTENT`、`RADIUS_CIRCLE`、`COORD_MAX`、`COORD_MIN`、`IMG_ZOOM_NONE`、`BTNMATRIX_BTN_NONE`、`CHART_POINT_NONE`、`DROPDOWN_POS_LAST`、`LABEL_DOT_NUM`、`LABEL_POS_LAST`、`LABEL_TEXT_SELECTION_OFF`、`TABLE_CELL_NONE`、`TEXTAREA_CURSOR_LAST`、`LAYOUT_FLEX`、`LAYOUT_GRID`、`HOR_RES`、`VER_RES`。
+
+<Callout type="warn">
+常量的数值跟随固件所带 LVGL ABI。脚本必须使用导出的符号，不能复制另一版 LVGL 的枚举整数。
+</Callout>
+
+### 生命周期规则
+
+- Lua userdata 保存的是原生 LVGL 对象引用；对象被页面或父对象删除后，旧引用立即失效；
+- `set_text_static` 不复制文本，传入字符串的存储期必须覆盖 Label 使用期；普通脚本优先使用会复制文本的 setter；
+- 动画与 event callback 会持有原生资源，页面退出时先停止动画、解除事件、再删除对象；
+- 固件会记录 “Null root object”“dsc is null”“draw_buf is null”等错误，但不能保证所有悬空指针都被拦截。
+
+### 机型可用性
+
+| Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|---|---|
+| ✅ | ✅ |
+
+### 获取源代码
+
+- [LVGL 文档](https://docs.lvgl.io/master/)
+- [LVGL 源码](https://github.com/lvgl/lvgl)
+
+---
+
+参考来源：官方 docs-lua / 洛汐文档库 https://docs.luoxe.cn/

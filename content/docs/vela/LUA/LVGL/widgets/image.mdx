@@ -1,0 +1,61 @@
+---
+title: Image
+description: 图片控件
+---
+
+继承自 [Object](/docs/vela/LUA/LVGL/widgets/object)
+
+## 创建
+
+```lua
+local img = parent:Image {
+  w = 100, h = 100,
+  src = "/flash/logo.bin",
+}
+```
+
+## 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `src` | string / userdata | 图片资源路径或内存引用 |
+| `pivot` | table `{x, y}` | 旋转中心点 |
+
+## 方法
+
+| 方法 | 说明 |
+|------|------|
+| `set_src(src)` | 设置图片资源路径或内存源 |
+| `set_offset({x, y})` | 设置图像偏移量 |
+| `set_pivot({x, y})` | 设置旋转中心点 |
+| `get_img_size([src])` | 获取图片尺寸，返回 `w, h` |
+
+## 示例
+
+```lua
+local img = lvgl.Image(nil, { w = 100, h = 100 })
+
+img:set_src("/flash/pic.bin")
+local w, h = img:get_img_size
+print("尺寸:", w, h)
+img:set_pivot({x = 50, y = 50})
+img:set_offset({x = 20, y = 10})
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+洛汐文档库记录的 Image 专用属性：
+
+| 属性 | 说明 |
+|------|------|
+| `src` | 图片资源路径（见上） |
+| `zoom` | 图片缩放 |
+| `angle` | 图片旋转角度 |
+| `pivot` | 旋转中心点 `{x, y}`（见上） |
+| `offset_x`, `offset_y` | 图像偏移量，配合 `set_offset` 使用 |
+
+专用方法：`set_src`、`set_offset`、`set_pivot`、`get_img_size`（见上）。
+
+参考来源：官方 docs-lua / 洛汐文档库

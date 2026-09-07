@@ -1,0 +1,68 @@
+---
+title: ImageBar
+description: 图片进度条控件
+---
+
+继承自 [Object](/docs/vela/LUA/LVGL/widgets/object)
+
+<Callout type="warn">
+⚠️ 该控件在模拟器的 `debug.getregistry["widgets"]` 中未注册，可能仅在特定硬件设备上可用。API 签名基于源码分析，**待设备验证**。
+</Callout>
+
+## 创建
+
+```lua
+local imgbar = parent:ImageBar {
+  w = 200, h = 40,
+  src_bg = "S:/images/bar_bg.bin",
+  src_fg = "S:/images/bar_fg.bin",
+  value = 60,
+}
+```
+
+## 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `src_bg` | string / imgsrc | 背景图片 |
+| `src_fg` | string / imgsrc | 前景图片（进度部分） |
+| `value` | integer | 当前进度值（0~100） |
+| `range` | `{min, max}` | 进度范围 |
+| `direction` | string | 方向：`"left"`, `"right"`, `"top"`, `"bottom"` |
+
+## 方法
+
+| 方法 | 说明 |
+|------|------|
+| `set(tbl)` | 批量设置属性 |
+
+## 示例
+
+```lua
+local imgbar = lvgl.ImageBar(nil, {
+  w = 200, h = 40,
+  src_bg = "S:/images/bar_bg.bin",
+  src_fg = "S:/images/bar_fg.bin",
+  value = 75,
+  direction = "right",
+})
+
+imgbar:set({ value = 90 })
+```
+
+---
+
+### 社区补充（洛汐文档库）
+
+洛汐文档库补充的 ImageBar 范围/绘制属性：
+
+| 属性 | 说明 |
+|------|------|
+| `center_x`, `center_y` | 进度条中心点坐标 |
+| `linecap` | 线条端点样式 |
+| `bar_width` | 条带宽度 |
+| `value` | 当前进度值（见上） |
+
+此外还包含一组进度映射参数，用于把数值映射到图片进度区域。
+
+参考来源：官方 docs-lua / 洛汐文档库

@@ -1,0 +1,175 @@
+---
+title: "system.mqtt · MQTT连接\""
+---
+
+> 社区/商业版资料，openvela 开源仓库未收录（无 JIDL 实证），内容来自洛汐文档库，API 以实际设备引擎为准。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.mqtt` |
+| Feature 类型 | 社区/商业版资料，开源仓库未收录 |
+
+## 导入方式
+
+```js
+const m = require('system.mqtt')
+```
+
+#  system.mqtt 
+
+原生 MQTT 客户端 Feature。它与只负责 protobuf 编解码的 `system.mqttmessage` 不同：`system.mqtt` 建立网络连接、订阅主题并发布消息。
+```text
+
+
+
+
+import
+ mqtt
+ from
+ '
+@system.mqtt
+'
+
+
+
+```
+
+## `mqtt.createConnection(options)`
+
+```text
+
+interface MqttConnectOptions {
+  brokerUrl: string
+  clientId?: string
+  username?: string
+  password?: string
+  clean?: boolean
+  keepalive?: number
+  reconnectPeriod?: number
+  connectTimeout?: number
+  userProperties?: object
+}
+
+createConnection(options: MqttConnectOptions): MqttClient
+
+```
+
+字段 | 必需 | 说明  
+---|---|---  
+`brokerUrl` | 是 | Broker URL；格式不合法或缺失会直接报错  
+`clientId` | 否 | 客户端 ID；未传时固件可生成以 `mqtt_` 开头的 ID  
+`username`、`password` | 否 | Broker 凭据  
+`clean` | 否 | 是否使用 clean session  
+`keepalive` | 否 | MQTT keepalive 周期  
+`reconnectPeriod` | 否 | 自动重连间隔  
+`connectTimeout` | 否 | 建连超时  
+`userProperties` | 否 | MQTT 用户属性；预装汽车应用用于携带业务元数据  
+```text
+
+
+const client = mqtt.createConnection({
+  brokerUrl: 'ssl://broker.example.invalid:8883',
+  clientId: 'watch-client-id',
+  username: 'user',
+  password: 'short-lived-token',
+  clean: true,
+  keepalive: 60,
+  reconnectPeriod: 3000,
+  connectTimeout: 10000,
+  userProperties: { channel: 'watch' }
+})
+
+```
+
+协议 scheme、TLS 证书和端口是否可用由厂商 MQTT 后端决定。示例域名不可直接使用。
+
+## 客户端事件
+
+```text
+
+client.onconnect =  => {}
+client.ondisconnect = reason => {}
+client.onreconnect =  => {}
+client.onerror = error => {}
+client.onmessage = (topic, payload) => {}
+
+```
+
+固件确认 `onconnect`、`ondisconnect`、`onreconnect`、`onmessage`；预装应用还设置 `onerror`。`payload` 可能是 `String` 或 `ArrayBuffer`，应按协议判断后再解码。
+
+## 订阅与发布
+
+```text
+
+client.addTopic(options: {
+  topic: string
+  success?: Function
+  fail?: Function
+  complete?: Function
+}): void
+
+client.removeTopic(options: { topic: string } | string): void
+
+client.publish(options: {
+  topic: string
+  payload: string | ArrayBuffer
+  retain?: boolean
+  success?: Function
+  fail?: Function
+  complete?: Function
+}): void
+
+```
+
+`addTopic` 对应订阅，原生实现强制要求 `topic`。`publish` 强制要求 `topic`，并只接受 String 或 ArrayBuffer 的 `payload`。固件还保留 `addTopicListener`、`removeTopicListener` 内部入口；业务应用使用 `onmessage` 接收消息即可。
+```text
+
+
+client.onconnect =  => {
+  client.addTopic({
+    topic: 'ToWatch/device-id/#',
+    fail(data, code) { console.error('subscribe', code) }
+  })
+}
+
+client.onmessage = (topic, payload) => {
+  console.log('message topic', topic)
+}
+
+client.publish({
+  topic: 'FromWatch/device-id/result',
+  payload: new Uint8Array([1, 2, 3]).buffer,
+  retain: false
+})
+
+```
+
+## 断开连接
+预装应用在 `onHide`/`onDestroy` 调用客户端的 `disconnect`。应先移除不再使用的主题，再断开连接；不要让后台重连器在页面销毁后继续运行。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 不支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 不支持 |
+| 小米手环 10 Pro | 不支持 |
+| Xiaomi Watch S4 | 部分支持 |
+| REDMI Watch 5 | 不支持 |
+| REDMI Watch 6 | 不支持 |
+| Xiaomi Watch S5 | 支持 |
+## 获取源代码
+  * openvela Feature Framework 当前没有公开该厂商 MQTT Feature 的 JIDL 或 C++ 实现。
+  * [Feature Framework 仓库](https://github.com/open-vela/frameworks_runtimes_feature)
+
+---
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)

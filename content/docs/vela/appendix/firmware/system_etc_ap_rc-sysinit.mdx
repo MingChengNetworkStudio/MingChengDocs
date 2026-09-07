@@ -1,0 +1,41 @@
+---
+title: "AP rc.sysinit"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 403 字节  
+SHA-256 |  `c68d54f0826f7b6bd12ca57f74d1f76ba6f92e0e14f2490bf9f1059a2e28e90f`  
+阶段 | AP 最早期系统初始化  
+  
+该脚本先建立正常系统需要的挂载点，再启动基础守护进程。
+
+## 命令逐项解释
+命令 | 含义  
+---|---  
+`set +e` | 个别命令失败后继续执行，避免一个挂载失败阻止整个 AP 启动  
+`mount -t procfs /proc` | 提供进程和内核状态接口  
+`mount -t tmpfs /tmp` | 建立易失临时目录  
+`pmconfig stay normal` | 把电源管理状态设置/保持在正常模式  
+`mount -t romfs /dev/resource /resource` | 挂载只读资源分区  
+`mount -t yaffs -o autoformat /dev/nand_data /data` | 挂载用户/应用数据；无法识别时可能自动格式化  
+`mount -t littlefs -o autoformat /dev/nv /misc` | 把 NV 分区作为 `/misc`，保存属性/状态类数据  
+`mount -t littlefs -o autoformat /dev/mode /mode` | 挂载模式分区，保存启动/工作模式  
+`offline_log start -w &` | 启动离线日志写入  
+`kvdbd &` | 启动键值数据库服务，供属性或系统组件使用  
+`system_trace` | 初始化系统追踪设施  
+`miwear_rtc_checker` | 检查/修正穿戴设备 RTC 状态  
+  
+## 关键风险
+`autoformat` 很重要：当文件系统损坏或类型不匹配时，挂载器可能直接格式化分区。修改分区节点、文件系统类型或挂载顺序前必须先备份 `/data`、`/misc` 和 `/mode`。
+
+`/resource` 是只读 ROMFS，正常运行时不能直接覆盖其中资源；`/data`、`/misc`、`/mode` 才是持久可写区域。
+
+## 与 rcS 的关系
+只有这些挂载和基础服务完成后，AP `rcS` 才能读取 `/data/nobusiness`、加载产品映射并启动 MiWear、健康、连接和振动服务。
+
+## o63 差异
+o63 不使用上表的单一 `/dev/resource` 与 YAFFS `/dev/nand_data`。它把 vendor、system、app、misc、i18n、font、watchface、quickapp、factory 九个 ROMFS 分别挂载，使用 `fsckexfat` 检查 `/dev/data` 后挂到 `/data`，并把 `/dev/userlog` 挂到 `/log`。
+
+它还启动 audio/cp/sensor 三个 RPMsg 远端核，挂载 `rpmsgfs`，运行 `sensor_load`、`kvdbd` 与 RTC checker。任何精简启动方案都必须保留与硬件协处理器的初始化顺序，否则主 UI 可能启动但音频、传感器或安全服务不可用。

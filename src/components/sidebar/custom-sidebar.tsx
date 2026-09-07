@@ -51,6 +51,8 @@ function getSectionFromUrl(url: string | undefined): string | undefined {
       return "simplefetch";
     case "mingcheng-api":
       return "mingcheng";
+    case "vela":
+      return "vela";
     default:
       return undefined;
   }

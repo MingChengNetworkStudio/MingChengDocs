@@ -1,0 +1,223 @@
+---
+title: "system.volume 系统音量"
+---
+
+> 获取和设置系统媒体（音乐）音量，并可监听媒体音量的变化。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.volume` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.volume" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import volume from '@system.volume'
+// 或
+const volume = require('@system.volume')
+// 本仓库运行时/测试中使用的写法
+const volume = require('system.volume')
+```
+
+## 功能概述
+
+`system.volume` 用于读取/设置系统**媒体流（Music）**音量：`getMediaValue` 获取当前多媒体音量，`setMediaValue` 设置当前多媒体音量，音量值在 JS 侧为 0.0~1.0 的浮点数（Native 内部为 0~10 的整数音量档，换算关系为 `value * 10`）。
+
+Native 层通过 multimedia 框架的音频策略接口（`media_uv_policy_get/set_stream_volume`，libuv 异步）与 media server 通信；Feature 实例创建时还会通过 `media_policy_subscribe` 订阅音乐流音量变化，系统音量被任何地方修改时通过 `onMediaValueChanged` 事件通知 JS。
+
+典型使用场景：应用内音量调节条、音量同步显示。可参考 `openvela/packages/apps/wearable/vela-sample/src/interface/system/volume/index.ux`。
+
+## API
+
+### volume.setMediaValue(info)
+
+设置当前多媒体（音乐流）音量。回调风格，无 Promise 形式。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| value | number(double) | 是 | - | 设置的音量，范围 0.0~1.0；超出范围返回失败。 |
+| success | function | 否 | - | 回调签名 `success(ret: GetRet)`，`ret.value` 为设置的音量值。 |
+| fail | function | 否 | - | 回调签名 `fail(errorMsg: string, code: number)`。 |
+| complete | function | 否 | - | 回调签名 `complete(msg: string)`，`msg` 为 `"success"` 或 `"fail"`。 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number(double) | 本次设置的音量值（0.0~1.0） |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`
+- 错误码/错误信息（均由 Native 实现返回）：
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"param is invalid"` | `value` 不在 0.0~1.0 范围内 |
+| 202 | `"volume malloc fail"` | Native 内部内存分配失败 |
+| 202 | `"media_uv_policy_set_stream_volume fail"` | 调用音频策略服务设置音量失败 |
+| 其他（负数） | `"volume_set_cb failed"` | 媒体服务异步返回设置失败，code 为底层返回值 |
+
+> 官方标准文档描述：fail 回调返回[通用错误码](https://iot.mi.com/vela/quickapp/zh/features/grammar.html#通用错误码)（openvela 实证的具体错误码/错误信息以上表为准）。
+
+**示例**
+
+```js
+const volume = require('system.volume')
+
+volume.setMediaValue({
+  value: 0.5,
+  success: function (ret) {
+    console.log('设置成功，当前音量:', ret.value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('设置失败:', code, errorMsg)
+  },
+  complete: function (msg) {
+    console.log('complete:', msg)
+  }
+})
+```
+
+### volume.getMediaValue(info)
+
+获取当前多媒体（音乐流）音量。回调风格，无 Promise 形式。
+
+**参数（info 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| success | function | 否 | - | 回调签名 `success(ret: GetRet)`，`ret.value` 为当前音量。 |
+| fail | function | 否 | - | 回调签名 `fail(errorMsg: string, code: number)`。 |
+| complete | function | 否 | - | 回调签名 `complete(msg: string)`，`msg` 为 `"success"` 或 `"fail"`。 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number(double) | 系统媒体当前音量，0.0~1.0（Native 0~10 档位除以 10） |
+
+**失败回调 fail**
+
+- 参数：`(errorMsg: string, code: number)`
+- 错误码/错误信息（均由 Native 实现返回）：
+
+| code | errorMsg | 触发条件 |
+| ---- | -------- | -------- |
+| 202 | `"volume malloc fail"` | Native 内部内存分配失败 |
+| 202 | `"media_uv_policy_get_stream_volume failed"` | 调用音频策略服务获取音量失败 |
+| -1 | `"volume_get_cb volume invalid"` | 媒体服务返回的音量档不在 0~10 范围内，或异步回调返回失败 |
+
+**示例**
+
+```js
+const volume = require('system.volume')
+
+volume.getMediaValue({
+  success: function (ret) {
+    console.log('当前音量:', ret.value)
+  },
+  fail: function (errorMsg, code) {
+    console.log('获取失败:', code, errorMsg)
+  }
+})
+```
+
+## 事件
+
+### onMediaValueChanged
+
+多媒体音量发生变化时触发（JIDL 中声明为 `event onMediaValueChanged(GetRet value)`）。当系统媒体音量被任何途径修改（本应用设置、其他应用设置、系统控件等）时触发。
+
+**赋值方式**：把回调函数赋给 `volume.onMediaValueChanged` 即可监听；赋为 `null` 取消监听（Feature 实例销毁时 Native 会自动退订）。
+
+**回调参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| value | number(double) | 是 | 系统媒体当前音量，变化后的音量值，0.0~1.0（Native 0~10 档位除以 10） |
+
+**示例**
+
+```js
+const volume = require('system.volume')
+
+// 开始监听
+volume.onMediaValueChanged = function (ret) {
+  console.log('音量发生变化:', ret.value)
+}
+
+// 停止监听
+// volume.onMediaValueChanged = null
+```
+
+## 属性（property）
+
+无普通 property（`onMediaValueChanged` 为事件，见上节）。
+
+## 数据结构
+
+### GetRet
+
+`getMediaValue`/`setMediaValue` 的 success 回调参数及 `onMediaValueChanged` 事件参数：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number(double) | 音量值，0.0~1.0 |
+
+### SetInfo / GetInfo
+
+`setMediaValue(info)` 参数对象：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| value | number(double) | 目标音量，0.0~1.0（必填） |
+| success | function | 成功回调 `success(ret: GetRet)` |
+| fail | function | 失败回调 `fail(errorMsg: string, code: number)` |
+| complete | function | 完成回调 `complete(msg: string)`，`msg` 为 `"success"`/`"fail"` |
+
+`getMediaValue(info)` 参数对象仅包含 `success`/`fail`/`complete` 三个回调字段。
+
+## 注意事项
+
+- **音量范围**：JS 侧 0.0~1.0；Native 音频策略服务使用 0~10 的整数档，换算为 `value * 10`，因此最小调节粒度为 0.1。
+- **作用对象**：仅针对媒体/音乐流（`MEDIA_STREAM_MUSIC`，即 `"Music"`），不影响通话、闹钟、铃声等其他流的音量。
+- **事件订阅时机**：Native 在 Feature 实例被引用（onRequired）时即订阅音量变化策略项，无论是否赋值 `onMediaValueChanged`；没有 JS 监听器时事件不会派发。页面/组件销毁时建议置 `null` 取消监听。
+- **与 system.audio 的关系**：`system.audio` 的 `volume` 属性最终也是设置音乐流音量，二者作用于同一系统音量，变化会互相体现（`system.audio` 播放中每秒刷新自身音量值）。
+- 参考用例：`openvela/packages/apps/wearable/vela-sample/src/interface/system/volume/index.ux`。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 支持 |
+| 小米手环 8 Pro | 支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 支持 |
+| Redmi Watch 4 | 支持 |
+| 小米腕部心电血压记录仪 | 支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

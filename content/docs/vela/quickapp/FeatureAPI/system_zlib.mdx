@@ -1,0 +1,130 @@
+---
+title: "system.zlib zlib 压缩/解压"
+---
+
+> 提供基于 zlib 的同步数据解压能力，自动识别 zlib/raw deflate/gzip 三种压缩格式。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.zlib` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import zlib from '@system.zlib'
+// 本仓库运行时/测试中使用的写法
+const zlib = require('system.zlib')
+```
+
+## 功能概述
+
+`system.zlib` 当前提供一个同步解压方法 `decompressSync`：将压缩后的字节数据解压为原始字节。只提供这一个同步解压方法，**没有压缩、流式解压或异步接口**（社区资料：洛汐文档库）。Native 层直接调用 zlib 的 `inflate` 系列接口，并依次以三种 windowBits 参数尝试解压——**zlib 封装格式**（`MAX_WBITS`，15）、**raw deflate 裸流**（`-MAX_WBITS`，-15）、**gzip 格式**（`MAX_WBITS + 16`，31），因此调用方无需指定压缩格式，三种格式的数据都可以自动识别解压。输出缓冲区按 16KB（16384 字节，即 16 KiB）为块动态增长，可解压任意长度的数据。
+
+该方法为**同步方法**：没有 success/fail/complete 回调，也不返回 Promise，结果通过返回值直接给出。
+
+## API
+
+### zlib.decompressSync(data)
+
+同步解压 typed buffer（zlib/raw deflate/gzip 格式的压缩数据），返回 `Uint8Array`；输入不是 typed buffer 或解压失败时返回 `null`。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| data | Uint8Array | 是 | - | 待解压的压缩字节数据。Native 实现仅接受 TypedBuffer（Uint8Array）类型，传入其它类型会失败 |
+
+**返回值**
+
+| 返回值 | 含义 |
+| ------ | ---- |
+| `Uint8Array` | 解压成功，为解压后的原始字节数据；零长度是否有效取决于输入流 |
+| `null`（空值） | 参数不是 typed buffer（入参为空、类型不是 Uint8Array），或三种模式均解压失败 |
+
+**失败行为**
+
+该方法为同步方法、无 fail 回调、无错误码。以下情况返回空值：
+
+- `data` 为 null/undefined；
+- `data` 不是 Uint8Array（TypedBuffer）类型（Native 日志：`get data failed`）；
+- 数据不是合法的 zlib/raw deflate/gzip 压缩流（三种 windowBits 尝试均失败，Native 日志输出 zlib 错误信息 `zError(ret)` 及 `Failed to decompress, unknown error.`）。
+
+**示例**
+
+```js
+const zlib = require('system.zlib')
+
+// 解压 Uint8Array（zlib / gzip / raw deflate 格式均可自动识别）
+const compressed = new Uint8Array([
+  0x78, 0x9c, 0x4b, 0xcb, 0xcf, 0x07, 0x00, 0x02, 0x8d, 0x01, 0x49
+]) // 例如 zlib 压缩后的 "hi"
+
+const plain = zlib.decompressSync(compressed)
+if (plain) {
+  console.log('decompressed bytes:', plain)
+  // 如需转字符串：
+  console.log('decompressed text:', new TextDecoder('utf-8').decode(plain))
+} else {
+  console.log('decompress failed')
+}
+```
+
+输入推荐使用 `Uint8Array`。如果拿到的是 `ArrayBuffer`，可显式创建视图（社区资料：洛汐文档库）：
+
+```js
+function decompressArrayBuffer(buffer) {
+  return zlib.decompressSync(new Uint8Array(buffer))
+}
+```
+
+解压 UTF-8 文本时仍需单独解码，此接口不会返回字符串：
+
+```js
+const bytes = zlib.decompressSync(payload)
+if (bytes) {
+  const text = new TextDecoder('utf-8').decode(bytes)
+  console.log(text)
+}
+```
+
+> 说明：本方法为同步 API，直接返回解压结果（Uint8Array），不支持回调或 `.then`/`.catch` 写法；请通过判断返回值是否为空（`=== null`）来处理失败情况。
+
+## 注意事项
+
+- **仅支持解压**：当前 JIDL 只定义了 `decompressSync`（解压），没有提供压缩方法。
+- **入参类型**：必须传入 `Uint8Array`（Native 层 `FT_TYPE_TYPED_BUFFER`）；传 string、普通对象或其它类型会直接失败并返回空值。若数据是 `ArrayBuffer`，请先用 `new Uint8Array(buffer)` 创建视图。
+- **格式自动探测**：内部依次按 zlib（windowBits=15）、raw deflate（windowBits=-15）、gzip（windowBits=31）三种方式初始化 inflate，任一成功即返回；输入数据需是这三种格式之一的合法压缩流。
+- **同步执行**：解压在当前调用线程同步完成，输出缓冲区以 16KB（16 KiB）为单位按需扩容；解压超大数据时会阻塞当前执行上下文（快应用 JS/uvloop），建议避免在 UI 关键路径解压超大缓冲区。
+- **防止 zip bomb（社区资料：洛汐文档库）**：实现以 16 KiB 为增长块，**没有对最终解压尺寸施加显式上限**，调用方应自行限制不可信输入，尤其要防止"小输入解压成超大数据"的 zip bomb 类负载。建议同时限制压缩数据大小和业务允许的预期输出大小；由于 API 只有在完成后才返回，**无法在中途终止解压**。对不可信网络数据，优先在手机端或后端解压。
+- **错误处理**：失败不抛异常、不返回错误码，仅返回空值（`null`）并在 Native 日志中记录原因（如 `Zlib mode: <n> error: <zlib 错误描述>`）。
+- **机型可用性（社区资料：洛汐文档库）**：`decompressSync` 在 Xiaomi Smart Band 10 Pro、Xiaomi Watch S4 41mm 上均确认可用。
+- 具体行为以 Native 实现为准。
+
+## 机型支持明细
+
+| 设备产品 | 说明 |
+| --- | --- |
+| 小米 S1 Pro 运动健康手表 | 不支持 |
+| 小米手环 8 Pro | 不支持 |
+| 小米手环 9 / 9 Pro | 支持 |
+| Xiaomi Watch S3 | 不支持 |
+| Redmi Watch 4 | 不支持 |
+| 小米腕部心电血压记录仪 | 不支持 |
+| 小米手环 10 | 支持 |
+| 小米手环 10 Pro | 支持 |
+| Xiaomi Watch S4 | 支持 |
+| REDMI Watch 5 | 支持 |
+| REDMI Watch 6 | 支持 |
+| Xiaomi Watch S5 | 支持 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

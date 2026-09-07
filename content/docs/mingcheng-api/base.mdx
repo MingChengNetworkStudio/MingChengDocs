@@ -1,81 +1,97 @@
 ---
 title: 设备验证模块
 icon: Key
-description: 设备验证、获取设备信息等基础功能
+description: 设备激活、凭证获取、设备信息/额度查询、服务器时间与公开统计
 ---
 
-> 模块类型: system | 权限等级: 无
+> 模块类型：system ｜ 基础路径：`/api/v2`（无模块名前缀）｜ 鉴权：none / 设备 APIKey
 
-## 设备验证
-
-### 设备验证（V2）
+## 跳转支付
 
 | 项目 | 内容 |
 |------|------|
-| **API** | `GET /api/v2/verify/:appname?data=xxx` |
-| **说明** | 设备验证，生成设备 Key 并重定向到爱发电支付页面 |
+| **API** | `GET /api/v2/verify/:appname` |
+| **鉴权** | none |
+| **说明** | 生成设备 remark 并 302 跳转到爱发电收银台（自动填写备注） |
 
 **参数：**
 
 | 参数 | 位置 | 必填 | 说明 |
 |------|------|------|------|
-| `appname` | path | 是 | 应用名 |
-| `data` | query | 是 | 设备数据，格式：`设备名.设备ID.唯一ID.时间戳`（URL编码） |
+| `appname` | path | 是 | 应用名（`^[a-zA-Z][a-zA-Z0-9_]{0,63}$`） |
+| `data` | query | 是 | 需 URL 编码，格式 `设备名.设备ID.唯一ID.时间戳`，4 段以 `.` 分隔；各段 ≤255 字符、无控制字符，`设备ID`/`唯一ID` 非空 |
 
-**返回：** 302 重定向到 `orderURL`(自动填写Remark备注)
-
----
-
-### 验证检查
-
-| 项目 | 内容 |
-|------|------|
-| **API** | `GET /api/v2/verifyCheck/:appname?data=xxx&type=xxx` |
-| **说明** | 检查设备授权状态，返回签名后的 APIKey |
-
-**参数：**
-
-| 参数 | 位置 | 必填 | 说明 |
-|------|------|------|------|
-| `appname` | path | 是 | 应用名 |
-| `data` | query | 是 | 加密数据 |
-| `type` | query | 否 | 验证类型 |
-<Callout type="warn">
-type当前只支持normal和free，如果用户选择免费版，则必须携带type=free参数
+<Callout type="info">
+`data` 的第 4 段时间戳在此接口可传任意值,服务端不做校验
 </Callout>
 
-**返回：**
+**返回：** **302 Redirect** 到爱发电收银台（`Location: <afdianUrl>&remark=...`），无 JSON body。
+
+**错误：** 400 `data` 缺失/格式错误；404 应用不存在；500 应用未配置支付链接或私钥。
+
+---
+
+## 验证鉴权
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/verifyCheck/:appname` |
+| **鉴权** | none |
+| **说明** | 获取签名后的设备 APIKey |
+
+**参数：**
+
+| 参数 | 位置 | 必填 | 说明 |
+|------|------|------|------|
+| `appname` | path | 是 | 应用名 |
+| `data` | query | 是 | 同发起支付，4 段；`时间戳` 为客户端当前 Unix 秒，与服务器差须 **≤300 秒** |
+| `type` | query | 否 | 传 `free` 表示申请免费激活（仅 free-* 计费模式应用支持） |
+
+<Callout type="warn">
+申请免费版必须携带 `type=free`；时间戳超出 ±300 秒会返回 401「请求已过期」。
+</Callout>
+
+**成功 200：**
 
 ```json
 {
   "status": 200,
   "result": {
-    "APIKey": "设备密钥",
-    "signature": "签名"
+    "APIKey": "<64 位设备密钥>",
+    "signature": "<对 APIKey 的 RSA-SHA256 签名(base64)>"
   }
 }
 ```
-**验证：**
+
+- `signature` 用应用私钥签名，客户端可用内置应用公钥**离线校验**授权
+- 每次调用都会**轮换**该设备的 APIKey，客户端应以最新返回为准。
+
+**错误：**
+
+- 400 `data` 缺失 / 格式错误；
+- 401 请求已过期 / 设备未验证（未支付且非免费激活）/ 设备被封禁或已过期；
+- 409 设备唯一标识冲突（重复数据）；
+- 404 应用不存在。
 
 ---
 
-### 获取设备信息
+## 设备信息
 
 | 项目 | 内容 |
 |------|------|
 | **API** | `POST /api/v2/getInfo/:appname` |
-| **说明** | 获取设备详细信息（状态、请求数等） |
+| **鉴权** | 设备 APIKey（**noQuota**，不扣费） |
+| **说明** | 设备自查状态、计费模式与剩余额度 |
 
 **参数：**
 
 | 参数 | 位置 | 必填 | 说明 |
 |------|------|------|------|
 | `appname` | path | 是 | 应用名 |
-| `Key` | body | 是 | 设备 API Key |
+| `Key` | body | 是 | 设备 API Key（或 `?key=`） |
+| `UTCoffset` | body | 否 | 订阅制用于到期时间本地化，小时数（-24~24） |
 
-**返回：** 根据应用 `billingMode` 返回不同字段
-
-**通用字段：**
+**公共字段：**
 
 ```json
 {
@@ -83,41 +99,33 @@ type当前只支持normal和free，如果用户选择免费版，则必须携带
   "deviceID": "ABC123",
   "DeviceName": "设备1",
   "onlyID": "unique-id",
-  "regdate": "2025-01-01",
+  "regdate": "2025-01-01 00:00:00",
   "userType": "normal",
-  "billingMode": "normal"
+  "billingMode": "normal",
+  "userUrl": "..."
 }
 ```
 
-**买断制：**
+按计费模式追加字段：
 
-```json
-{ "...通用字段", "ALLRequests": "500", "UseRequests": "100", "FreeRequests": "400" }
-```
+| billingMode | 追加字段 |
+|---|---|
+| `subscribe`（订阅制） | `expiredAt`：到期时间 `"YYYY-MM-DD HH:MM:SS"`（受 `UTCoffset` 影响）；订阅期内不限量 |
+| `usage` / `free-usage`（按量制） | `remainingAmount`：剩余余额（字符串） |
+| `normal` / `free-limit`（买断/次数制） | `ALLRequests`、`UseRequests`、`FreeRequests`：总额 / 已用 / 剩余（字符串） |
+| `free-share`（免费共享池） | 免费用户取共享计数器的 `ALLRequests`/`UseRequests`/`FreeRequests`；付费用户取本设备 |
 
-**订阅制：**
-
-```json
-{ "...通用字段", expiredAt": "Sub_2025-12-31" }
-```
-**按量制：**
-
-```json
-{ "...通用字段", "remainingAmount": "25.5" }
-```
-
-<Callout>
-Key 无效时返回 `status: 201`
-</Callout>
+**错误：** 401 缺少鉴权 / Key 无效 / 设备被封禁或过期；404 设备或应用不存在。
 
 ---
 
-### 获取服务器时间
+## 获取服务器时间
 
 | 项目 | 内容 |
 |------|------|
 | **API** | `POST /api/v2/getTime` |
-| **说明** | 获取服务器当前时间 |
+| **鉴权** | none |
+| **说明** | 获取服务器当前时间（可用于校准 `data` 时间戳） |
 
 **无参数**
 
@@ -132,3 +140,57 @@ Key 无效时返回 `status: 201`
   }
 }
 ```
+
+---
+
+## 公开统计
+
+面向终端用户的公开设备统计，无需鉴权。
+
+### 全部应用设备数
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/apps/stats` |
+| **鉴权** | none |
+
+**返回：**
+
+```json
+{
+  "status": 200,
+  "result": {
+    "total": "3",
+    "applist": [
+      { "appname": "Eternal", "total": "1024" },
+      { "appname": "WearPost", "total": "256" }
+    ]
+  }
+}
+```
+
+### 单应用设备统计
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/apps/:appname/stats` |
+| **鉴权** | none |
+
+**返回：**
+
+```json
+{
+  "status": 200,
+  "result": {
+    "appname": "Eternal",
+    "total": "1024",
+    "banned": "3",
+    "free": "120",
+    "device": [ { "name": "MiBand", "total": "300" } ]
+  }
+}
+```
+
+<Callout type="info">
+统计数值均为字符串。错误：400 应用名非法；404 应用不存在。
+</Callout>

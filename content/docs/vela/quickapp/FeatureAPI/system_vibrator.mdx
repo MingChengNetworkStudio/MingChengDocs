@@ -1,0 +1,255 @@
+---
+title: "system.vibrator 振动器"
+---
+
+> 提供设备振动能力，支持短振/长振等预定义效果、按"时长+间隔+次数"周期性振动，以及查询系统振动默认强度。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.vibrator` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+
+## 接口声明
+
+```json
+{ "name": "system.vibrator" }
+```
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import vibrator from '@system.vibrator'
+// 或
+const vibrator = require('@system.vibrator')
+// 本仓库运行时/测试中使用的写法
+const vibrator = require('system.vibrator')
+```
+
+## 功能概述
+
+该 Feature 用于触发设备马达振动，典型场景包括按键触感反馈、消息提醒、周期性振动提示等。官方标准定义的能力包括：
+
+- `vibrate`：触发一次振动（`mode` 为 `"long"` 长振动 / `"short"` 短振动）；
+- `start`：按"振动时长 + 间隔 + 次数"开始周期性振动，成功后返回唯一任务 id；
+- `stop`：按任务 id 停止振动；
+- `getSystemDefaultMode`：获取系统默认振动模式（0 关闭振动 / 1 标准振动 / 2 加强振动）。
+
+Native 实现通过系统 `vibrator_api`（`vibrator_play_predefined` / `vibrator_play_interval` / `vibrator_cancel` / `vibrator_is_disabled` / `vibrator_get_intensity`）调用振动器服务/HAL，并基于 libuv 定时器维护周期振动任务的占用状态。`vibrate` 为同步"即发即忘"接口；`start` 为回调风格的异步周期振动接口，同一时刻只允许一个周期振动任务。
+
+## API
+
+### vibrator.vibrate(obj)
+
+触发一次预定义振动效果。**同步方法**，无返回值、无回调。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| mode | string | 否 | `"default"` | 振动模式，实现识别 `"long"`（长振，Pop 预定义效果）和 `"short"`（短振，Tick 预定义效果） |
+
+参数对象本身也可省略（JIDL 中 `obj = null`）。
+
+> 官方标准文档描述：`mode` 为 String 非必填，"long"表示长振动，"short"表示短振动，**默认为 long**。
+
+**行为说明（以 Native 实现为准）**
+
+- 不传参数 `vibrator.vibrate`：播放默认预定义振动效果（Pop 效果 + 默认强度）。
+- `mode: "long"`：播放长振动效果（Pop 预定义效果）。
+- `mode: "short"`：播放短振动效果（Tick 预定义效果）。
+- 其它 `mode` 值（包括默认值 `"default"` 显式传入时）不匹配实现中的任何分支，**不会触发振动**。
+- 模式匹配为前缀匹配（如以 `"long"` 开头的字符串也会命中长振分支）。
+
+**示例**
+
+```js
+const vibrator = require('system.vibrator')
+
+// 默认效果振动
+vibrator.vibrate
+
+// 长振
+vibrator.vibrate({ mode: 'long' })
+
+// 短振
+vibrator.vibrate({ mode: 'short' })
+```
+
+### vibrator.start(obj)
+
+启动周期性振动：按"振动 duration 毫秒、暂停 interval 毫秒"的节奏重复 count 次。**回调风格**异步方法（success/fail/complete），无 Promise 形式。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| duration | number | 是 | 0 | 每次振动时长（毫秒，振动持续时间），必须为**正整数** |
+| interval | number | 是 | 0 | 两次振动之间的间隔（毫秒，振动间隔时间），必须为**正整数** |
+| count | number | 是 | 0 | 振动重复次数，必须为**正整数** |
+| success | function | 否 | null | 成功回调，签名 `success(data)` |
+| fail | function | 否 | null | 失败回调，签名 `fail(data, code)` |
+| complete | function | 否 | null | 完成回调（成功/失败都会调用），无参数 |
+
+**成功返回 / success 回调参数**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| id | number | 振动任务 id（唯一的 ID，标识振动任务），用于调用 `stop`；当前实现成功时固定返回 `1` |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 实现中实际返回的错误：
+
+| code | data（错误信息） | 触发条件 |
+| ---- | ---- | ---- |
+| 202 | `"unvaild arg"` | 参数为空，或 duration/interval/count 不是正整数（官方标准文档描述为"参数错误"；错误信息拼写以实现为准） |
+| 205 | `"task already exists"` | 已有一个周期振动任务进行中（官方标准文档描述为"任务已存在"；同一 Feature 实例同时只允许一个任务） |
+| 底层错误码（负数） | `"fail"` | 底层 `vibrator_play_interval` 返回失败，code 为其返回值 |
+
+**示例**
+
+```js
+const vibrator = require('system.vibrator')
+
+vibrator.start({
+  duration: 500,   // 每次振动 500ms
+  interval: 1000,  // 间隔 1000ms
+  count: 3,        // 共 3 次
+  success: function (ret) {
+    console.log('振动任务已启动，id =', ret.id)
+  },
+  fail: function (data, code) {
+    console.log('启动失败', code, data)
+  },
+  complete: function  {
+    console.log('start 调用结束')
+  }
+})
+```
+
+### vibrator.stop(id)
+
+停止由 `start` 启动的周期振动任务。**同步方法**，返回 boolean。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| id | number | 是 | 无 | `start` 成功回调返回的任务 id（振动任务 ID） |
+
+**返回值**
+
+| 类型 | 说明 |
+| ---- | ---- |
+| boolean | `true`：停止成功；`false`：id 与当前任务不匹配，或底层 `vibrator_cancel` 失败 |
+
+**示例**
+
+```js
+const vibrator = require('system.vibrator')
+
+vibrator.start({
+  duration: 500,
+  interval: 1000,
+  count: 100,
+  success: function (ret) {
+    // 3 秒后提前停止
+    setTimeout(function  {
+      const ok = vibrator.stop(ret.id)
+      console.log('停止结果：', ok)
+    }, 3000)
+  }
+})
+
+// 也可直接传入任务 id
+// vibrator.stop(1)
+```
+
+### vibrator.getSystemDefaultMode
+
+查询系统振动器的默认状态/强度（获取系统默认振动模式）。**同步方法**，返回 number。
+
+**参数**：无。
+
+**返回值**
+
+| 返回值 | 含义 |
+| ---- | ---- |
+| 0 | 振动功能已被系统禁用 / 关闭振动（`vibrator_is_disabled` 返回 disabled） |
+| 1 | 默认振动强度为低或中（`VIBRATION_INTENSITY_LOW` / `VIBRATION_INTENSITY_MEDIUM`）；官方标准文档描述为"标准振动" |
+| 2 | 默认振动强度为高（`VIBRATION_INTENSITY_HIGH`）；官方标准文档描述为"加强振动" |
+| -1 | 查询失败（底层接口返回错误，或强度值未知） |
+
+> 官方标准文档仅列出 0/1/2 三种返回值。
+
+**示例**
+
+```js
+const vibrator = require('system.vibrator')
+
+const mode = vibrator.getSystemDefaultMode
+if (mode === 0) {
+  console.log('振动已被系统关闭')
+} else if (mode === -1) {
+  console.log('振动状态查询失败')
+} else {
+  console.log('当前振动强度等级：', mode) // 1：标准（低/中），2：加强（高）
+}
+```
+
+## 数据结构
+
+### VibrateObject
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| mode | string | 振动模式，默认 `"default"`；实现实际识别 `"long"` / `"short"` |
+
+### StartObject
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| duration | number | 每次振动时长（毫秒），默认 0，须为正整数 |
+| interval | number | 振动间隔（毫秒），默认 0，须为正整数 |
+| count | number | 重复次数，默认 0，须为正整数 |
+| success | function | 成功回调，默认 null |
+| fail | function | 失败回调，默认 null |
+| complete | function | 完成回调，默认 null |
+
+### VibrateDataRet
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| id | number | 振动任务 id，默认 0；start 成功时为 1 |
+
+## 注意事项
+
+- **周期振动任务唯一**：同一 Feature 实例同一时刻只允许一个 `start` 任务；任务进行中再次调用 `start` 会收到 code 205（`"task already exists"`，任务已存在）。任务自然结束（实现内部按 `(duration + interval) * count` 毫秒设置定时器）或被 `stop` 成功停止后，才可再次启动。
+- **参数校验严格**：`duration`、`interval`、`count` 必须同时为大于 0 的整数（小数、0、负数均判定为非法），否则 fail 回调 code 为 202（参数错误）。
+- **回调一次性**：`start` 的 success/fail/complete 回调在调用后即被移除，不会重复触发。
+- **`vibrate` 无回调**：预定义效果为"即发即忘"，无法获知振动是否真正执行成功；显式传 `mode: "default"` 在当前实现中不会触发振动，需要默认效果时请直接调用 `vibrator.vibrate` 不传参。
+- **`stop` 校验 id**：传入的 id 必须与当前任务 id（当前实现为 1）一致，否则直接返回 `false`。
+- 底层依赖系统振动器服务（`vibrator_api`）；设备上无振动器或服务不可用时，相关调用可能失败或无效果，具体行为以 Native 实现为准。
+
+## 机型支持明细
+
+> 以下为官方标准文档公布的机型支持情况（openvela 开源版本是否可用以实际固件/Native 实现为准）。
+
+| 接口 | 已支持设备产品 | 不支持设备产品 |
+| --- | --- | --- |
+| vibrate | 小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9 / 9 Pro、Redmi Watch 4、Xiaomi Watch H1、Xiaomi Watch S3、小米手环 10、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6、Xiaomi Watch S5 | - |
+| start | Xiaomi Watch S5 | Xiaomi Watch S3、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6、小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9 / 9 Pro、小米手环 10、Redmi Watch 4、Xiaomi Watch H1 |
+| stop | Xiaomi Watch S5 | Xiaomi Watch S3、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6、小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9 / 9 Pro、小米手环 10、Redmi Watch 4、Xiaomi Watch H1 |
+| getSystemDefaultMode | Xiaomi Watch S5 | Xiaomi Watch S3、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6、小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9 / 9 Pro、小米手环 10、Redmi Watch 4、Xiaomi Watch H1 |
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`

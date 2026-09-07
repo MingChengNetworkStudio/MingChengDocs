@@ -1,0 +1,28 @@
+---
+title: "Factory rcS"
+---
+
+## 文件信息
+项目 | 值  
+---|---  
+大小 | 87 字节  
+SHA-256 |  `7a206c310523505fb46d8c7613f7c9b42dfdca4e3f6ec198b669b58d1454e726`  
+阶段 | 工厂业务进程启动  
+  
+Factory `rcS` 很短，只启动产测所需服务：
+
+命令 | 作用  
+---|---  
+`bluetoothd &` | 蓝牙核心服务  
+`BTCONN START &` | 厂商蓝牙连接/射频测试入口  
+`charger_manage &` | 充电和供电测试支持  
+`healthd &` | 健康传感器数据后端  
+`vibratord &` | 马达测试后端  
+`lc_factory &` | 主工厂测试应用  
+  
+它没有启动正常 AP 的 `miwear`、MiConnect、NFC bridge 或快应用环境，避免业务进程占用硬件并干扰测试。
+
+## 实验价值
+Factory 镜像可用于确认 `healthd`、`vibratord` 或 Bluetooth 驱动是否在硬件层可工作。如果 Factory 能测试成功而 AP API 失败，问题更可能位于 AP 服务、权限或 Feature 层，而不是硬件本身。
+
+不要在正常 AP 里直接同时启动 `BTCONN START` 和完整 MiWear 蓝牙栈；它们可能争用控制器。

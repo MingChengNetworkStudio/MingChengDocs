@@ -11,34 +11,80 @@ import {
   EnvelopeIcon,
   MegaphoneIcon,
   CreditCardIcon,
+  MagicWandIcon,
+  WrenchIcon,
+  BroadcastIcon,
 } from "@phosphor-icons/react/dist/ssr";
 
 # 简介
 
-MingChengAPI 是一个高自由度、开放的第三方快应用 API 服务，为开发者提供设备验证、天气数据、邮件服务、公告系统等功能。  
-其具有可拓展性强，开发者友好，稳定安全等特点
+MingChengAPI 是一个高自由度、开放的第三方快应用 API 服务，为开发者提供设备验证、天气数据、邮件服务、AI 模型中转、AI 任务、B 站设备桥接等功能。
+其具有可拓展性强，开发者友好，稳定安全等特点。
 
 ## API基础信息
 
 | 项目 | 值 |
 |------|-----|
 | 基础路径 | `https://api.b4qaq.cn/api/v2` |
-| 认证方式 | APIKey或账密 |
+| 认证方式 | 设备 APIKey |
 | 统一响应格式 | `{ status: 200, result: ..., message: "..." }` |
+
 <Callout type="info">
-message可选
+`message` 字段可选；失败时返回对应 HTTP 状态码与 `{ status: <码>, result: "<错误信息>" }`。
 </Callout>
+
 ## 权限等级
 
 ```
 Verify(设备验证) < User(普通用户) < Dev(开发者) < ROOT(超级管理员)
 ```
+
+初始注册均为User,请联系站长(QQ 525148989或525148989@qq.com)开启Dev权限
+
 <Callout type="warn">
-Service模块功能仅Verify权限可用
+下文的服务模块（天气、邮件、AI 等）均使用设备 APIKey，且应用须在后台启用对应服务后才可调用。
 </Callout>
+
+## 简单接入
+
+### 1. 注册账号
+进入https://api.b4qaq.cn/，点击右上角注册，按照提示注册，并使用邮箱激活
+### 2. 申请提权
+联系QQ 525148989或向525148989@qq.com发送邮件，明确说明需要使用API，需要提权
+获得提权后重新登录，即可进入管理后台
+### 3. 爱发电接入
 <Callout type="warn">
-内部管理员API并不在本文档范围内
+请先完成爱发电认证!
+请先完成爱发电认证!
+请先完成爱发电认证!
 </Callout>
+前往 https://afdian.com/dashboard/dev 填写订单Webhook地址为:  
+```json
+https://api.b4qaq.cn/api/v2/payment/afdian/webhook
+```
+<ImageZoom
+  src="/assets/images/docs/MingchengAPI/afd.png"
+  alt="afd"
+/>
+### 4. 创建应用
+目前为止，你已经完成了所有基础设置,可以将MingChengAPI集成至应用中了!  
+进入后台`管理面板 -> 应用管理 -> 添加应用`按照如图所示填写信息
+<ImageZoom
+  src="/assets/images/docs/MingchengAPI/createAPP.png"
+  alt="创建应用"
+/>
+关于爱发电订单链接填写：  
+需要您创建好爱发电商品后从顶部URL中获取，进入创建订单页面后，上方URL即为需要填写的URL
+<ImageZoom
+  src="/assets/images/docs/MingchengAPI/afd2.png"
+  alt="afd2"
+/>
+<Callout type="warn">
+不要嫌URL过长想要删去一部分!真的想删请自行确认删除后URL可以正确跳转到支付!  
+不要嫌URL过长想要删去一部分!真的想删请自行确认删除后URL可以正确跳转到支付!  
+不要嫌URL过长想要删去一部分!真的想删请自行确认删除后URL可以正确跳转到支付!  
+</Callout>
+至此一切大功告成！
 
 ## 功能模块
 
@@ -48,14 +94,42 @@ Service模块功能仅Verify权限可用
     title="设备验证"
     href="/docs/mingcheng-api/base"
   >
-    设备验证、获取设备信息等基础功能
+    设备激活、凭证获取、设备信息/额度查询、服务器时间与公开统计
   </Card>
   <Card
     icon={<CloudIcon className="text-green-400" weight="duotone" />}
     title="和风天气"
-    href="/docs/mingcheng-api/qweather"
+    href="/docs/mingcheng-api/weather"
   >
-    天气预报、预警、城市信息、天气指数等
+    天气预报、预警、城市信息、天气指数、分钟级降水
+  </Card>
+  <Card
+    icon={<EnvelopeIcon className="text-purple-400" weight="duotone" />}
+    title="邮件服务"
+    href="/docs/mingcheng-api/mail"
+  >
+    邮箱概览、邮件列表、收发邮件、文件夹与草稿管理
+  </Card>
+  <Card
+    icon={<MagicWandIcon className="text-indigo-400" weight="duotone" />}
+    title="AI 模型中转"
+    href="/docs/mingcheng-api/ai"
+  >
+    OpenAI / Anthropic 双协议兼容的模型中继，自动转换与计费
+  </Card>
+  <Card
+    icon={<WrenchIcon className="text-teal-400" weight="duotone" />}
+    title="AI 任务"
+    href="/docs/mingcheng-api/aitool"
+  >
+    兼容弱网设备的异步 AI 对话 / 工具调用任务（轮询取结果）
+  </Card>
+  <Card
+    icon={<BroadcastIcon className="text-pink-400" weight="duotone" />}
+    title="B 站设备桥接"
+    href="/docs/mingcheng-api/bilibili"
+  >
+    BiliMax 手机端转码桥接：WebSocket 接入与 App HTTP 调用
   </Card>
   <Card
     icon={<MegaphoneIcon className="text-orange-400" weight="duotone" />}
@@ -65,14 +139,7 @@ Service模块功能仅Verify权限可用
     获取系统和应用公告
   </Card>
   <Card
-    icon={<EnvelopeIcon className="text-purple-400" weight="duotone" />}
-    title="邮件服务"
-    href="/docs/mingcheng-api/mail"
-  >
-    邮箱概览、邮件列表、发送邮件等
-  </Card>
-  <Card
-    icon={<CreditCardIcon className="text-pink-400" weight="duotone" />}
+    icon={<CreditCardIcon className="text-rose-400" weight="duotone" />}
     title="支付系统"
     href="/docs/mingcheng-api/payment"
   >

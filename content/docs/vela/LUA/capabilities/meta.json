@@ -1,0 +1,4 @@
+{
+  "title": "Vela 能力模块",
+  "pages": ["activity", "animengine", "dataman", "navigator", "screen", "topic", "vibrator"]
+}

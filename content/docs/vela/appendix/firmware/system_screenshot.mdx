@@ -1,0 +1,141 @@
+---
+title: "截屏"
+---
+
+系统提供两种可用的截屏方式：p67 的系统截图命令，以及直接读取 framebuffer。Lua 表盘接口没有公开全屏截图函数。
+
+## p67：系统截图命令
+
+p67 的截图处理最终执行：
+
+```bash
+dd if=/dev/fb0 of=/data/snapshot/<名称>.bin bs=483840 count=1
+```
+
+因此截图保存在：
+
+```text
+/data/snapshot/<名称>.bin
+```
+
+文件是 framebuffer 原始像素，不是 PNG、JPEG 或 BMP。每次读取固定 `483840` 字节。系统成功响应会返回所用名称；失败返回 `SCREEN_SHOT=ERROR`。
+
+设备同时注册了 `miwear-snapshot` 名称。它属于系统截图服务入口，不向快应用或 Lua 表盘开放。p67 的本地落盘位置就是上面的 `/data/snapshot/`；无需再扫描 `/tmp` 或 `/log`。
+
+### 导出文件
+
+取得系统 shell 后：
+
+```bash
+ls -l /data/snapshot
+```
+
+把生成的 `.bin` 复制到电脑，再按设备 framebuffer 的宽、高、stride 和像素格式转换。不要仅凭文件长度猜测可视分辨率，因为缓冲区可能包含行对齐或不可见区域。
+
+## o63：`miwear-snapshot`
+
+o63 提供 `miwear-snapshot` 服务入口，但不使用 p67 的 `/data/snapshot/{名称}.bin` 固定路径。该入口由系统截图/调试通道接收结果，本地文件系统中没有固定输出文件。
+
+```text
+miwear-snapshot
+```
+
+调用后应从连接设备使用的 MiWear 调试端读取结果。它不是带 `-o` 参数的通用截图工具，也不会默认生成 `/data/snapshot/*.bin`。
+
+## 直接读取 `/dev/fb0`
+
+系统程序可查询 framebuffer 信息后保存当前 plane。输出路径可自行指定：
+
+```c
+#include <nuttx/video/fb.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv)
+{
+  const char *outpath = argc > 1 ? argv[1] : "/data/screenshot.raw";
+  struct fb_videoinfo_s vinfo = {0};
+  struct fb_planeinfo_s pinfo = {0};
+  int fb = open("/dev/fb0", O_RDONLY);
+  if (fb < 0) { perror("open /dev/fb0"); return 1; }
+
+  if (ioctl(fb, FBIOGET_VIDEOINFO,
+            (unsigned long)(uintptr_t)&vinfo) < 0 ||
+        ioctl(fb, FBIOGET_PLANEINFO,
+              (unsigned long)(uintptr_t)&pinfo) < 0) {
+    perror("framebuffer info");
+    close(fb);
+    return 1;
+  }
+
+  printf("fmt=%u xres=%u yres=%u bpp=%u stride=%u fblen=%lu\n",
+         vinfo.fmt, vinfo.xres, vinfo.yres, pinfo.bpp,
+         pinfo.stride, (unsigned long)pinfo.fblen);
+
+  void *pixels = mmap(NULL, pinfo.fblen, PROT_READ, MAP_SHARED, fb, 0);
+  if (pixels == MAP_FAILED) { perror("mmap"); close(fb); return 1; }
+
+  int out = open(outpath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (out < 0) { perror("open output"); munmap(pixels, pinfo.fblen); close(fb); return 1; }
+
+  const uint8_t *p = pixels;
+  size_t left = pinfo.fblen;
+  while (left != 0) {
+    ssize_t n = write(out, p, left);
+    if (n <= 0) { perror("write"); break; }
+    p += n;
+    left -= (size_t)n;
+  }
+
+  close(out);
+  munmap(pixels, pinfo.fblen);
+  close(fb);
+  return left == 0 ? 0 : 1;
+}
+```
+
+读取前必须用 `FBIOGET_VIDEOINFO` 和 `FBIOGET_PLANEINFO` 获取：
+
+- `xres`、`yres`：可视宽高；
+- `bpp`、`fmt`：位深与像素格式；
+- `stride`：每行实际字节数；
+- `fblen`：映射及保存长度。
+
+若确定为无行填充的小端 RGB565，可转换为：
+
+```bash
+ffmpeg -f rawvideo -pixel_format rgb565le \
+  -video_size <宽>x<高> -i screenshot.raw -frames:v 1 screenshot.png
+```
+
+当 `stride` 大于每行有效像素字节数时，需要先逐行去除 padding。读取过程中 UI 仍可能刷新，必要时等待画面静止后再抓取。
+
+## Lua 表盘
+
+Lua 绑定中没有确认到可调用的 `take_snapshot`、`screenshot` 或同等全屏方法。固件内部出现的 LVGL snapshot 符号属于原生图形实现，不能据此写成 Lua 方法。
+
+Lua 表盘若需要预览图，应由开发工具渲染，或由系统侧通过上述截图入口取得，不要调用：
+
+```lua
+-- 不存在的公开接口
+-- root:take_snapshot
+```
+
+## 机型可用性
+
+| 能力 | Xiaomi Smart Band 10 Pro | Xiaomi Watch S4 41mm |
+|---|---|---|
+| `miwear-snapshot` | ✅ | ✅ |
+| 固定写入 `/data/snapshot/` | ✅ | ❌ |
+| 系统读取 `/dev/fb0` | ✅ | ✅ |
+| Lua 全屏截图函数 | ❌ | ❌ |
+
+## 获取源代码
+
+- [NuttX framebuffer 字符设备说明](https://github.com/apache/nuttx/blob/master/Documentation/components/nxgraphics/framebuffer_char_driver.rst)
+- [LVGL snapshot 原生实现](https://github.com/lvgl/lvgl/tree/master/src/others/snapshot)

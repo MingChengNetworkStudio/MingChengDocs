@@ -1,0 +1,39 @@
+---
+title: "AP D-Bus system.conf"
+---
+
+o63 新增的系统 D-Bus 总线配置，p67tc AP `/etc` 未包含该文件。它决定系统总线的监听地址、服务激活、默认消息策略和附加配置目录。
+
+## 关键配置
+项目 | o63 配置 | 作用  
+---|---|---  
+总线类型 |  `system` | 创建系统级总线而非用户 session bus  
+Unix socket |  `/var/run/dbus/system_bus_socket` | 本核进程连接入口  
+RPMsg listener |  `rpmsg:name=dbus_socket` | 让远端核通过 RPMsg 连接 D-Bus  
+服务目录 |  `standard_system_servicedirs` | 搜索标准 `.service` 激活描述  
+service helper |  `/usr/lib/dbus-1.0/dbus-daemon-launch-helper` | 按需启动系统服务的 helper 路径  
+日志 |  `syslog` | 把 daemon 日志送到系统日志后端  
+配置目录 | 相对 `system.d` 与 `/etc/dbus-1/system.d` | 加载各服务的策略片段  
+本地覆盖 |  `/etc/dbus-1/system-local.conf` | 文件存在时最后加载  
+  
+## 默认策略
+o63 配置允许所有用户连接、拥有 bus name、发送 method call、signal、reply，并接收所有主要消息类型。它只对 `org.freedesktop.DBus` 的少数管理接口做显式拒绝，例如更新激活环境、调试统计和 systemd activator；root 仍可使用 Monitoring 与 Stats。
+
+这比常见桌面 Linux 的 system bus 默认策略宽松。真正的访问控制可能继续在服务端方法、调用方凭据、RPMsg 对端或系统应用签名层执行，但不能假定它们一定存在。
+
+## 修改影响
+  * 新增 `listen` XML 元素会扩大可连接面，可能把系统服务暴露给非预期进程或远端核；
+  * 放宽 `allow`/移除 `deny` 可能允许应用调用关机、帐号、密钥等高权限服务；
+  * 收紧规则可能导致 `account`、`dkf_iccoa`、MiConnect 或其他系统进程启动后无法通信；
+  * ROMFS 只读，永久修改需要重建 AP 镜像；仅在 `/data` 放同名文件不会自动覆盖本配置。
+
+系统包含 `system-local.conf` 的可选入口，但 o63 没有提供该文件，也没有证明启动时会从可写分区绑定覆盖 `/etc`。如果要实验，优先复制配置到独立环境并以显式 `dbus-daemon --config-file` 启动测试总线，不要直接替换正在工作的系统总线。
+
+## 机型可用性
+机型/样本 | 结果  
+---|---  
+Xiaomi Watch S4 41mm（o63） | 文件存在，包含 Unix 与 RPMsg 两个 listener  
+Xiaomi Smart Band 10 Pro（p67tc） | AP `/etc` 未发现该文件  
+  
+## 获取源代码
+  * [D-Bus bus configuration manual](https://dbus.freedesktop.org/doc/dbus-daemon.1.html)

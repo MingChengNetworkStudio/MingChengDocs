@@ -1,0 +1,61 @@
+---
+title: Vela 应用开发文档
+description: Xiaomi Vela 上 Lua 应用/表盘开发、快应用 Feature API 参考，以及 NSH Shell 与系统固件资料
+icon: Code
+---
+
+import {
+  TerminalWindowIcon,
+  PuzzlePieceIcon,
+  BookBookmarkIcon,
+} from "@phosphor-icons/react/dist/ssr";
+
+# Vela 应用开发文档
+
+本套文档面向 **Xiaomi Vela**（NuttX）上的应用开发者，按开发形态分为三大部分：
+
+| 分类 | 适用场景 |
+| ---- | ---- |
+| **[Lua 应用开发](/docs/vela/LUA)** | Lua 5.4 + LVGL 的应用与表盘开发：入门、UI 控件、能力模块、Lua 标准库与实战 |
+| **[快应用 Feature](/docs/vela/quickapp)** | Quick App Feature API：通过 `require('system.xxx')` 调用网络、蓝牙、多媒体、文件、传感器等能力 |
+| **[附录](/docs/vela/appendix)** | NSH Shell 命令参考、系统与固件配置（`/etc`、ota、recovery）及社区资料 |
+
+<Callout type="info">
+文档融合了 openvela 源码实证、Vela 官方文档快照与社区资料。Feature API 行为以源码实证为准；官方与实证冲突处以文中 `> 官方标准文档描述：…` 标注；社区内容均显式标注来源。  
+感谢各位社区大佬的付出，如有侵权请联系删除
+</Callout>
+<Callout type="warn">
+此文档可能有与实际设备不符的地方,欢迎指出错误
+</Callout>
+
+## 从这里开始
+
+<Cards>
+  <Card
+    icon={<TerminalWindowIcon className="text-blue-400" weight="duotone" />}
+    title="Lua 应用开发"
+    href="/docs/vela/LUA"
+  >
+    Lua 5.4 + LVGL 应用与表盘：入门指南、18 个 UI 控件、Vela 能力模块、Lua 标准库与表盘实战。
+  </Card>
+  <Card
+    icon={<PuzzlePieceIcon className="text-green-400" weight="duotone" />}
+    title="快应用 Feature"
+    href="/docs/vela/quickapp"
+  >
+    45 个 Feature 模块的方法签名、参数、错误码与示例（对照 openvela 源码实证）。
+  </Card>
+  <Card
+    icon={<BookBookmarkIcon className="text-orange-400" weight="duotone" />}
+    title="附录"
+    href="/docs/vela/appendix"
+  >
+    NSH Shell 命令参考、系统与固件配置、设备兼容性与社区上手指南。
+  </Card>
+</Cards>
+
+## 快速导航
+
+- 查快应用 Feature API（方法 / 参数 / 错误码 / 示例）→ [快应用 Feature](/docs/vela/quickapp)
+- 写 Lua 表盘 → [表盘开发实战](/docs/vela/LUA/guides/watchface)、[Lua 入门概览](/docs/vela/LUA/introduction/overview)
+- 查 NSH 命令 → [Shell 命令参考](/docs/vela/appendix/shell/index)

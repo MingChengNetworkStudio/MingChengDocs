@@ -1,0 +1,733 @@
+---
+title: "system.sensor 传感器"
+---
+
+> 订阅设备各类传感器数据（加速度、罗盘、距离、光线、气压、湿度、环境温度、GPS 等），支持持续订阅、单次读取最近数据与可用性检查。
+
+| 项目 | 说明 |
+| ---- | ---- |
+| 模块名 | `system.sensor` |
+| Feature 类型 | 标准 Feature |
+| 所需权限 | 无 |
+| 接口声明 | `{ "name": "system.sensor" }`（manifest.json 的 features 中声明） |
+
+## 导入方式
+
+```js
+// 快应用标准写法
+import sensor from '@system.sensor'
+// 或（官方文档写法）
+const sensor = require('@system.sensor')
+// 本仓库运行时/测试中使用的写法
+const sensor = require('system.sensor')
+```
+
+## 功能概述
+
+本 Feature 提供两套传感器访问 API：
+
+1. **按传感器类型划分的订阅/退订接口**（如 `subscribeAccelerometer` / `unsubscribeAccelerometer`）：订阅后周期性回调该传感器的数据，退订后停止回调。官方标准文档目前仅文档化了气压计、加速度计和罗盘三类专用接口，openvela 实证固件还实现了距离、光线、计步、湿度、环境温度等专用接口（见下文）。
+2. **通用传感器接口**（`subscribe` / `unsubscribe` / `getRecentData` / `checkAvailable` + `DATA_TYPES` 属性）：以传感器类型编号为参数，一套接口访问所有传感器，还支持 GPS（无独立订阅方法）。
+
+底层通过 libuv 事件循环（`uv_topic_subscribe`）订阅 NuttX uORB 传感器 topic（`sensor_accel`、`sensor_compass`、`sensor_prox`、`sensor_light`、`sensor_baro`、`sensor_humi`、`sensor_temp`、`sensor_gnss` 等），数据到达后在 JS 线程回调。传感器是否可用取决于设备上是否存在对应驱动/topic 发布者，可先用 `checkAvailable` 探测。
+
+> 社区资料（洛汐文档库）：回调数据的物理单位没有在 JIDL 中声明，`distance`、`intensity`、`humidity`、`temperature`、`steps` 等只能确认是 Number；不要未经真机校准就写死 cm、lux、%、°C 等单位标签。采样频率越快通常越耗电。
+
+## API
+
+### sensor.subscribeAccelerometer(params)
+
+订阅加速度传感器（监听加速度/重力感应数据）。订阅成功后周期性通过 `callback` 返回 x/y/z 三轴数据；无返回值，回调风格。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅，`true` 表示保留 |
+| interval | string | 否 | `"normal"` | 上报频率档位：`"game"`（约 20ms）、`"ui"`（约 50ms）、`"normal"`（约 200ms）；传其他值订阅不生效 |
+| callback | function | 是 | - | 数据回调，参数为 `AccelerometerRet`，重力感应数据变化后回调 |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（AccelerometerRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| x | number（int） | x 轴加速度/坐标，直接来自底层 `sensor_accel` 原始值 |
+| y | number（int） | y 轴加速度/坐标 |
+| z | number（int） | z 轴加速度/坐标 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码/错误信息（Native 实现）：
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 202 | `callback id is invalid` | callback 无效 |
+| 200 | `malloc error` | 内存分配失败 |
+| 200 | `subscribe error` | 底层 uORB 订阅失败 |
+
+> 注：`interval` 传非法值时 Native 仅打印错误日志并直接返回，不会触发 `fail` 回调。
+>
+> 官方标准文档描述：`interval` 合法值为 `game`（游戏回调频率，约 20ms/次）、`ui`（更新 UI 的回调频率，约 **60ms**/次）、`normal`（普通回调频率，约 200ms/次）。openvela 实证 `ui` 档约为 50ms。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeAccelerometer({
+  interval: 'normal', // 'game' | 'ui' | 'normal'
+  callback: function (ret) {
+    console.log('accel', ret.x, ret.y, ret.z)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+```
+
+### sensor.unsubscribeAccelerometer
+
+退订加速度传感器（取消监听加速度感应数据），停止数据回调。无参数、无返回值。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.unsubscribeAccelerometer
+```
+
+### sensor.subscribeCompass(params)
+
+订阅罗盘（指南针）传感器，监听罗盘数据。订阅后按固定周期（Native 固定为约 100ms）回调方向与精度数据。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `CompassRet`，罗盘数据变化后回调 |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（CompassRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| direction | number（double） | 方向角，**弧度制**（Native 将底层角度值 ×π/180 转换，并归一化到 (-π, π]）。语义为设备 y 轴与地球磁场北极之间的夹角：面朝北为 0，朝南为 π，朝东为 π/2，朝西为 -π/2 |
+| accuracy | number（double） | 校准/精度状态，来自底层 `sensor_compass.cal_status`，取值含义见下表 |
+
+**compass 精度说明**
+
+| 值 | 说明 |
+| --- | --- |
+| 3 | 高精度 |
+| 2 | 中等精度 |
+| 1 | 低精度 |
+| -1 | 不可信，传感器失去连接 |
+| 0 | 不可信，原因未知 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码：`202 callback id is invalid`、`200 malloc error`、`200 subscribe error`（含义同加速度传感器）。
+
+> 官方标准文档描述：`subscribeCompass` 的 fail 回调错误码 `1000` 表示"当前设备不支持罗盘传感器"。
+>
+> 官方标准文档描述：`subscribeCompass` 多次调用仅最后一次生效。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeCompass({
+  callback: function (ret) {
+    console.log('direction(rad)=', ret.direction, 'accuracy=', ret.accuracy)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+```
+
+### sensor.unsubscribeCompass
+
+退订罗盘传感器（取消监听罗盘数据）。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribeCompass
+```
+
+### sensor.subscribeProximity(params)
+
+订阅距离（近接）传感器，回调物体与设备之间的距离值。
+
+> 社区资料（洛汐文档库）：该接口为官方标准文档未收录的专用订阅接口，由 openvela 固件实现；应与 `unsubscribeProximity` 成对使用，页面销毁时取消订阅。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `ProximityRet` |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（ProximityRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| distance | number（double） | 距离值，来自底层 `sensor_prox.proximity`（单位以底层驱动为准） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码：`202 callback id is invalid`、`200 malloc error`、`200 subscribe error`。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeProximity({
+  reserved: false,
+  callback: function (ret) {
+    console.log('distance=', ret.distance)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+
+// 页面销毁时
+// sensor.unsubscribeProximity
+```
+
+### sensor.unsubscribeProximity
+
+退订距离传感器。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribeProximity
+```
+
+### sensor.subscribeLight(params)
+
+订阅环境光线传感器，回调光照强度。
+
+> 社区资料（洛汐文档库）：该接口为官方标准文档未收录的专用订阅接口。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `LightRet` |
+
+> 注意：JIDL 中 `Light` 结构**没有 `fail` 字段**，本方法不提供失败回调，不要依赖失败回调处理错误。
+
+**成功回调参数（LightRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| intensity | number（double） | 光照强度，来自底层 `sensor_light.light`（单位以底层驱动为准） |
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeLight({
+  reserved: false,
+  callback: function (ret) {
+    console.log('intensity=', ret.intensity)
+  }
+})
+```
+
+### sensor.unsubscribeLight
+
+退订光线传感器。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribeLight
+```
+
+### sensor.subscribeStepCounter(params)
+
+订阅计步器。**当前 Native 实现不支持计步传感器**：调用后会立即通过 `fail` 回调返回错误，不会产生任何数据回调。
+
+> 社区资料（洛汐文档库）：计步器在无对应硬件/系统服务的产品上会明确失败。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调（参数为 `StepCountRet`），当前实现不会被调用 |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（StepCountRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| steps | number（double） | 步数（当前设备不支持，不会回调） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 203 | `Current device does not support pedometer sensor` | 固定返回：设备不支持计步器 |
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeStepCounter({
+  callback: function (ret) {
+    console.log('steps=', ret.steps)
+  },
+  fail: function (data, code) {
+    // 当前设备固定走到这里：code=203
+    console.log('step counter unavailable', code, data)
+  }
+})
+```
+
+### sensor.unsubscribeStepCounter
+
+退订计步器。无参数、无返回值（计步器本就无法订阅，调用为安全空操作）。
+
+**示例**
+
+```js
+sensor.unsubscribeStepCounter
+```
+
+### sensor.subscribePressure(params)
+
+订阅气压传感器，监听压力、压强感应数据，回调大气压力值。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `BaroRet` |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（BaroRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| pressure | number（double） | 大气压力，来自底层 `sensor_baro.pressure`，保留 5 位小数；单位 hPa（百帕），浮点数 |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码：`202 callback id is invalid`、`200 malloc error`、`200 subscribe error`。
+
+> 官方标准文档描述：`subscribePressure` 如果多次调用，仅最后一次调用生效。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribePressure({
+  callback: function (ret) {
+    console.log('pressure=', ret.pressure)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+```
+
+### sensor.unsubscribePressure
+
+退订气压传感器（取消压力、压强感应数据监听）。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribePressure
+```
+
+### sensor.subscribeHumidity(params)
+
+订阅湿度传感器，回调环境相对湿度。
+
+> 社区资料（洛汐文档库）：该接口为官方标准文档未收录的专用订阅接口。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `HumidityRet` |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（HumidityRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| humidity | number（double） | 湿度值，来自底层 `sensor_humi.humidity`，四舍五入取整（单位以底层驱动为准） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码：`202 callback id is invalid`、`200 malloc error`、`200 subscribe error`。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeHumidity({
+  callback: function (ret) {
+    console.log('humidity=', ret.humidity)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+```
+
+### sensor.unsubscribeHumidity
+
+退订湿度传感器。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribeHumidity
+```
+
+### sensor.subscribeAmbientTemperature(params)
+
+订阅环境温度传感器，回调环境温度。
+
+> 社区资料（洛汐文档库）：该接口为官方标准文档未收录的专用订阅接口。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| callback | function | 是 | - | 数据回调，参数为 `TemperatureRet` |
+| fail | function | 否 | - | 失败回调 `fail(data: string, code: number)` |
+
+**成功回调参数（TemperatureRet）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| temperature | number（double） | 环境温度，来自底层 `sensor_temp.temperature`，保留 1 位小数（单位以底层驱动为准） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+- 错误码：`202 callback id is invalid`、`200 malloc error`、`200 subscribe error`。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.subscribeAmbientTemperature({
+  callback: function (ret) {
+    console.log('temperature=', ret.temperature)
+  },
+  fail: function (data, code) {
+    console.log('fail', code, data)
+  }
+})
+```
+
+### sensor.unsubscribeAmbientTemperature
+
+退订环境温度传感器。无参数、无返回值。
+
+**示例**
+
+```js
+sensor.unsubscribeAmbientTemperature
+```
+
+### sensor.subscribe(params)
+
+通用传感器订阅接口：以传感器类型编号订阅，数据通过 `callback` 以对象形式返回，支持包括 GPS 在内的全部传感器。订阅成功返回一个整数订阅标识（底层 fd），失败返回 `-1` 并触发 `fail`。
+
+同一传感器类型可多次订阅（多用户），每次调用返回独立的订阅标识。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | number（int） | 是 | - | 传感器类型编号，取值见 `DATA_TYPES` 属性 |
+| reserved | boolean | 否 | `false` | 页面跳转/销毁时是否保留订阅 |
+| interval | string | 否 | `"low"` | 上报频率档位：`"low"`（约 200ms）、`"mid"`（约 50ms）、`"high"`（约 20ms）；传其他值报错 |
+| callback | function | 是 | - | 数据回调 `callback(data: object)`，data 结构见下表 |
+| fail | function | 否 | `null` | 失败回调 `fail(data: string, code: number)` |
+
+> 注意：通用接口的 interval 档位为 `low`/`mid`/`high`（默认 `low`），与专用加速度计接口的 `game`/`ui`/`normal`（默认 `normal`）是两套默认值，不要混淆。
+
+**成功回调参数（data 对象）**
+
+`data` 是以传感器名称为 key 的对象，各传感器字段如下（数值均由 Native 做四舍五入处理）：
+
+| 传感器（DATA_TYPES key） | data 内容字段 |
+| ---- | ---- |
+| `GPS` | `{ latitude: number, longitude: number, altitude: number, speed: number, accuracy: number }`（经纬度/海拔/速度保留 5 位小数，accuracy 为整数 eph） |
+| `BAROMETER` | `{ pressure: number }`（保留 5 位小数） |
+| `ACCELEROMETER` | `{ x: number, y: number, z: number }`（保留 5 位小数） |
+| `COMPASS` | `{ direction: number, accuracy: number }`（direction 为弧度，accuracy 为整数校准状态） |
+| `PROXIMITY` | `{ distance: number }` |
+| `LIGHT` | `{ light: number }`（注意通用接口中字段名为 `light`，旧版 `subscribeLight` 回调中为 `intensity`） |
+| `AMBIENT_TEMPERATURE` | `{ temperature: number }`（保留 1 位小数） |
+| `HUMIDITY` | `{ humidity: number }`（取整） |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 200 | `callback id is invalid` | callback 无效 |
+| 203 | `current sensor is not support` | `type` 不是受支持的传感器编号 |
+| 200 | `param interval is invalid` | interval 不是 `low`/`mid`/`high` |
+| 200 | `malloc user failed` | 内存分配失败 |
+| 200 | `uv_topic_subscribe error` | 底层 uORB 订阅失败（如该传感器无驱动） |
+| 200 | `set interval error` | 设置上报周期失败 |
+
+**返回值**
+
+- number（int）：订阅标识（底层 topic fd）；失败返回 `-1`。
+
+> 社区资料（洛汐文档库）：虽然 `subscribe` 返回整数订阅标识，但对应的 `unsubscribe` 接收的参数是传感器 `type` 编号，**不是**返回的订阅 id。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+// 订阅 GPS（只能通过通用接口访问）
+const id = sensor.subscribe({
+  type: sensor.DATA_TYPES.GPS,
+  interval: 'low', // 'low' | 'mid' | 'high'
+  callback: function (data) {
+    const gps = data.GPS
+    console.log('lat=', gps.latitude, 'lon=', gps.longitude,
+      'alt=', gps.altitude, 'speed=', gps.speed, 'acc=', gps.accuracy)
+  },
+  fail: function (data, code) {
+    console.log('subscribe fail', code, data)
+  }
+})
+console.log('subscribe id=', id)
+```
+
+社区资料（洛汐文档库）给出的"先探测再订阅"写法：
+
+```js
+const type = sensor.DATA_TYPES.HUMIDITY
+
+if (sensor.checkAvailable(type)) {
+  const status = sensor.subscribe({
+    type: type,
+    reserved: false,
+    interval: 'low',
+    callback: function (data) { console.log('sensor data', data) },
+    fail: function (message, code) { console.error(code, message) }
+  })
+  console.log('subscribe status:', status)
+}
+```
+
+### sensor.unsubscribe(type)
+
+通用退订接口：按传感器类型编号退订通过 `subscribe` 建立的订阅。无返回值。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| type | number（int） | 是 | 传感器类型编号，取值见 `DATA_TYPES`（注意不是 `subscribe` 返回的订阅标识） |
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.unsubscribe(sensor.DATA_TYPES.GPS)
+```
+
+### sensor.getRecentData(params)
+
+读取指定传感器的**最近一次数据**（单次订阅，收到一帧数据后自动退订）。回调风格，无返回值。
+
+> 社区资料（洛汐文档库）：返回的最近值可能是缓存，不等同于此刻重新采样；`data` 是宽泛对象，结构通常与对应订阅回调一致。
+
+**参数（params 对象字段）**
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ------ | ---- |
+| type | number（int） | 是 | - | 传感器类型编号，取值见 `DATA_TYPES` |
+| success | function | 是 | - | 成功回调，参数为 `cb_param` |
+| fail | function | 否 | `null` | 失败回调 `fail(data: string, code: number)` |
+| complete | function | 否 | `null` | 完成回调，无参数（JIDL `sensor_complete_cb` 声明为无参），在本次读取结束（topic 关闭）后触发 |
+
+**成功回调参数（cb_param）**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| data | object | 传感器数据对象，结构与 `subscribe` 的回调 `data` 完全一致（以传感器名称为 key） |
+| dataType | number（int） | 传感器类型编号，即请求时传入的 `type` |
+
+**失败回调 fail**
+
+- 参数：`(data: string, code: number)`
+
+| code | message | 触发场景 |
+| ---- | ------- | -------- |
+| 200 | `success callback id is invalid` | 未传有效的 success 回调 |
+| 200 | `sensor not exist` | `type` 不是受支持的传感器编号 |
+| 200 | `malloc user failed` | 内存分配失败 |
+| 200 | `uv_topic_subscribe error` | 底层订阅失败 |
+
+> 失败路径也会触发 `complete` 回调。固件中还存在 `sensor type is not exist` / `sensor not exist` 的错误路径，传入未知编号时会失败。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+sensor.getRecentData({
+  type: sensor.DATA_TYPES.ACCELEROMETER,
+  success: function (ret) {
+    console.log('dataType=', ret.dataType)
+    console.log('accel=', ret.data.ACCELEROMETER)
+  },
+  fail: function (data, code) {
+    console.log('getRecentData fail', code, data)
+  },
+  complete: function  {
+    console.log('get recent data complete')
+  }
+})
+```
+
+### sensor.checkAvailable(type)
+
+检查指定类型的传感器在当前设备上是否可用（同步方法）。
+
+**参数**
+
+| 字段 | 类型 | 必填 | 说明 |
+| ---- | ---- | ---- | ---- |
+| type | number（int） | 是 | 传感器类型编号，取值见 `DATA_TYPES` |
+
+**返回值**
+
+- boolean：`true` 表示该类型受支持且设备上存在对应传感器（uORB topic 有发布者）；`false` 表示类型未知或设备不具备该传感器。传入未知编号时视为 `false`。
+
+**示例**
+
+```js
+const sensor = require('system.sensor')
+
+if (sensor.checkAvailable(sensor.DATA_TYPES.BAROMETER)) {
+  console.log('barometer is available')
+} else {
+  console.log('barometer is not available on this device')
+}
+```
+
+## 属性（property）
+
+| 属性 | 类型 | 读写 | 说明 |
+| ---- | ---- | ---- | ---- |
+| DATA_TYPES | object | 只读（`const property`） | 传感器名称到类型编号的映射表，供 `subscribe` / `unsubscribe` / `getRecentData` / `checkAvailable` 的 `type` 参数使用 |
+
+`DATA_TYPES` 包含的键值（Native 实现）：
+
+| key | type 值 | 说明 |
+| --- | ------- | ---- |
+| `GPS` | 0 | 定位（仅通用接口支持，无独立订阅方法） |
+| `BAROMETER` | 1 | 气压 |
+| `ACCELEROMETER` | 2 | 加速度 |
+| `COMPASS` | 3 | 罗盘 |
+| `PROXIMITY` | 4 | 距离 |
+| `LIGHT` | 5 | 光线 |
+| `STEP_COUNTER` | 6 | 计步器（当前实现不支持数据上报） |
+| `AMBIENT_TEMPERATURE` | 7 | 环境温度 |
+| `HUMIDITY` | 12 | 湿度 |
+| `WRIST_LIFT` | 22 | 抬腕检测（仅在编译开启 `CONFIG_MIWEAR_COMMON` 时存在） |
+
+```js
+const sensor = require('system.sensor')
+console.log(sensor.DATA_TYPES.ACCELEROMETER) // 2
+```
+
+> 社区资料（洛汐文档库）：固件常量成员至少包含 `ACCELEROMETER`、`COMPASS`、`PROXIMITY`、`STEP_COUNTER`、`BAROMETER`、`HUMIDITY`、`AMBIENT_TEMPERATURE`、`WRIST_LIFT` 等名称；不同固件的编号可能不同，运行时应读取 `sensor.DATA_TYPES` 常量对象而不是硬编码数值。`WRIST_LIFT`（抬腕检测）只在常量痕迹中确认，没有专用订阅签名，应通过通用 API（`checkAvailable` + `subscribe`）探测使用。
+
+## 数据结构
+
+各传感器的回调结构均由 JIDL struct 定义，字段汇总如下：
+
+| Struct | 字段 | 类型 | 使用者 |
+| ------ | ---- | ---- | ------ |
+| AccelerometerRet | x / y / z | int | `subscribeAccelerometer` 的 callback |
+| CompassRet | direction / accuracy | double | `subscribeCompass` 的 callback |
+| ProximityRet | distance | double | `subscribeProximity` 的 callback |
+| LightRet | intensity | double | `subscribeLight` 的 callback |
+| StepCountRet | steps | double | `subscribeStepCounter` 的 callback（当前不触发） |
+| BaroRet | pressure | double | `subscribePressure` 的 callback |
+| HumidityRet | humidity | double | `subscribeHumidity` 的 callback |
+| TemperatureRet | temperature | double | `subscribeAmbientTemperature` 的 callback |
+| cb_param | data（object）/ dataType（int） | object / int | `getRecentData` 的 success 回调 |
+
+## 注意事项
+
+- **回调风格**：本模块所有方法均为回调风格或同步方法，JIDL 未定义 Promise 返回值；`fail` 回调签名统一为 `fail(data: string, code: number)`。
+- **错误码**（Native `ErrorCode` 枚举）：`200 GENERAL`（通用错误）、`202 ARGSERROR`（参数错误，仅旧版订阅接口的无效 callback 使用）、`203 SERVICEUNAVAILABLE`（服务/传感器不可用）、`204 TIMEOUT`、`300 IOERROR`（后两个枚举已定义但当前实现未使用）。
+- **上报周期**：底层单位为微秒。旧版加速度接口 `game`/`ui`/`normal` 对应 20ms/50ms/200ms；罗盘固定 100ms；通用接口 `high`/`mid`/`low` 对应 20ms/50ms/200ms。采样越快通常越耗电。
+- **罗盘方向为弧度制**：Native 将底层角度值乘以 π/180 转为弧度后再回调，JS 侧如需角度请自行 `× 180 / Math.PI`。
+- **计步器不可用**：`subscribeStepCounter` 固定返回 `203` 错误；`DATA_TYPES.STEP_COUNTER`（6）在通用接口中也没有可用的 uORB topic。
+- **光线字段名差异**：旧版 `subscribeLight` 回调字段为 `intensity`；通用 `subscribe` / `getRecentData` 回调中光线数据字段名为 `light`。
+- **数值精度**：气压、GPS 经纬度/海拔/速度保留 5 位小数；温度保留 1 位小数；湿度四舍五入取整；各数据的物理量纲以底层 uORB 传感器驱动定义为准。
+- **页面生命周期**：`reserved` 为 `true` 时语义上表示页面跳转/销毁后保留订阅；实例销毁时 Native 会统一执行退订清理，具体保留行为以 Native 实现为准。社区资料（洛汐文档库）建议：`reserved` 的业务语义没有公开，保持默认 `false`；在页面 `onDestroy` 中取消所有已建立的订阅。
+- **避免混用两套接口**：社区资料（洛汐文档库）建议避免同时使用同一种传感器的专用订阅和通用订阅，除非真机确认底层支持多订阅者。
+- **依赖**：数据来源于 NuttX uORB 传感器 topic，设备必须存在对应传感器驱动（可用 `checkAvailable` 预先判断）；订阅与回调在 Feature 的 libuv 事件循环上分发。
+- 当前 Native 实现中，通用 `subscribe` 回调的 `PROXIMITY` 分支与 `LIGHT` 分支存在逻辑贯穿（fall-through），近距离数据可能附带 `LIGHT` 字段，具体行为以 Native 实现为准。
+
+## 机型支持明细
+
+官方标准文档给出的小米环表机型支持明细（商业固件，仅供参考；openvela 开源固件的可用性以 `checkAvailable` 实测为准）：
+
+| 接口 | 已支持设备产品 | 不支持设备产品 |
+| --- | --- | --- |
+| subscribePressure / unsubscribePressure | Xiaomi Watch S3、小米手环 9 Pro、小米手环 10、Xiaomi Watch S4、Xiaomi Watch S5 | 小米 S1 Pro 运动健康手表、小米手环 8 Pro、小米手环 9、Redmi Watch 4、Xiaomi Watch H1、REDMI Watch 5、REDMI Watch 6 |
+| subscribeAccelerometer / unsubscribeAccelerometer | 小米手环 9 / 9 Pro、小米手环 10、Xiaomi Watch S5 | Xiaomi Watch S3、小米 S1 Pro 运动健康手表、小米手环 8 Pro、Redmi Watch 4、Xiaomi Watch H1、Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6 |
+| subscribeCompass / unsubscribeCompass | Xiaomi Watch S4、REDMI Watch 5、REDMI Watch 6、Xiaomi Watch S5 | 其余小米环表设备 |
+
+> 社区资料（洛汐文档库）机型可用性：扩展传感器接口在 Xiaomi Smart Band 10 Pro、Xiaomi Watch S4 41mm 上为"部分支持（△）"，具体以真机 `checkAvailable` 结果为准。
+## 源码
+
+openvela 快应用代码仓库：`openvela/frameworks/runtimes/feature/`（JIDL 接口与 Native 实现）、`openvela/packages/`（使用示例）；引擎内置 Feature 预编译于 libquickappfeatures。
+
+## 参考来源
+
+- [Vela官方快应用开发文档](https://iot.mi.com/vela/quickapp)
+- [洛汐文档库](https://docs.luoxe.cn/)
+- openvela快应用代码仓库：`openvela/frameworks/`、`openvela/packages/`
