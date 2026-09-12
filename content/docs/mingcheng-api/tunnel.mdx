@@ -1,0 +1,123 @@
+---
+title: Tunnel 设备隧道
+icon: Network
+description: 多路复用流式 WebSocket 反向隧道，用标准 HTTP 访问设备本机 / 局域网主机
+---
+
+> 模块类型：service ｜ 基础路径：`/api/v2/tunnel` ｜ 鉴权：设备 APIKey（**noQuota**）
+
+一条**多路复用 + 流式的 WebSocket 反向隧道**：一台运行在 Windows / Linux / macOS / Android 上的**网关程序**（协议客户端，使用方按本协议自行实现）主动 WS 外连、鉴权后获得 6 位**设备码**，成为所在局域网的入口。调用方只用**标准 HTTP**，服务端经 WS 把请求**流式并发**转发到设备本机，或它所在**局域网内的其它主机**。
+
+支持：任意方法、二进制、并发（多 streamId）、实时流式（SSE / 大文件边下边发）、跨主机（X-Tunnel-Target）。
+
+---
+
+## 网关程序接入（WebSocket）
+
+| 项目 | 内容 |
+|------|------|
+| **协议** | WebSocket（外连后业务帧均为二进制，多路复用） |
+| **连接 URL** | 见下，`name`、`ip` 必填 |
+| **鉴权** | 查询参数 `key=<设备apiKey>`（路径带 `:appname`） |
+| **设备码** | 连接成功后由服务端在首帧下发（6 位） |
+
+连接（`ip` 为设备内网 IPv4/IPv6，缺失 / 非法返回 400）：
+
+```
+wss://<域名>/api/v2/tunnel/connectDevice/<appname>?key=<设备apikey>&name=<设备名>&ip=<内网IP>[&lanBaseUrl=...]
+```
+
+连接成功服务端发首帧（JSON 文本）：
+
+```json
+{ "ready": true, "deviceID": "384921", "protocol": "mux-v1" }
+```
+
+之后所有业务帧都是 **ws binary**，一条连接上并发多路（每请求一个偶数 streamId）。
+
+### 帧格式（首字节类型 + 4 字节大端 streamId）
+
+| 类型 | 字节 | 方向 | 载荷 |
+|---|---|---|---|
+| REQUEST | `0x01` | S→D | `u16 methodLen\|method\|u16 pathLen\|path\|u16 headerCount\|(u16 kLen\|k\|u16 vLen\|v)*`；body 随后由 DATA 承载 |
+| DATA | `0x02` | 双向 | 原始字节（请求/响应体分块，流式） |
+| HEADERS | `0x03` | D→S | `u16 status\|u16 headerCount\|(u16 kLen\|k\|u16 vLen\|v)*` |
+| ERROR | `0x04` | D→S | `u16 len\|message(utf8)` |
+| END | `0x05` | 双向 | 无（body 结束） |
+| CANCEL | `0x06` | 双向 | 无（调用方放弃/超时） |
+| PING/PONG | `0x07/0x08` | 双向 | 无 |
+
+<Callout type="info">
+u16 = 2 字节大端长度前缀；头 key/value 为 utf8。请求体已剔除调用方鉴权用的 Key 字段；设备按「读到 END」取体，不依赖 content-length。
+</Callout>
+
+### 设备端处理流程（伪代码）
+
+```
+on REQUEST(sid, method, path, headers):
+    target = headers["x-tunnel-target"]   // host:port，缺省=设备本机
+    up = http.request(target ?? 本机, method, path, headers去掉x-tunnel-target)
+    up.on('response', r => send HEADERS(sid, r.status, r.headers); r.on('data', d=>send DATA(sid,d)); r.on('end',()=>send END(sid)))
+on DATA(sid, d):  up.write(d)             // 请求体分块
+on END(sid):      up.end()
+on CANCEL(sid):   up.destroy()
+on error:         send ERROR(sid, msg)
+```
+
+- **局域网其它设备**：请求头 `X-Tunnel-Target: 192.168.1.20:8080`（或 `[fe80::1]:9000`、`nas.local:80`）；缺省目标是设备本机。
+- 不同 sid 同时在途、互不阻塞；HEADERS 后可持续 DATA 直到 END（响应流式）。
+
+---
+
+## 查询自己的设备码
+
+| 项目 | 内容 |
+|------|------|
+| **API** | `GET /api/v2/tunnel/getDevice/<appname>?key=<设备apikey>` |
+| **鉴权** | 设备 APIKey（**noQuota**） |
+
+成功 `200`：
+
+```json
+{
+  "status": 200,
+  "result": {
+    "online": true,
+    "deviceID": "384921",
+    "deviceName": "office-pc",
+    "ip": "192.168.1.10",
+    "lanBaseUrl": null,
+    "connectedAt": "...",
+    "lastSeenAt": "..."
+  }
+}
+```
+
+设备离线时 `online` 为 `false`。
+
+---
+
+## 调用方透传（标准 HTTP，四方法一致）
+
+```
+<GET|POST|PUT|DELETE> https://<域名>/api/v2/tunnel/<6位设备码>/<目标路径>
+Header: X-Tunnel-Target: <可选，局域网 host:port>
+```
+
+Key 放哪都行（优先级）：`?key=` query ＞ `Authorization: Bearer` ＞ `x-api-key` 头 ＞ **JSON body 的 `Key` 字段**（POST/PUT/DELETE，转发前自动剔除）。
+
+```js
+// GET
+axios.get(`/api/v2/tunnel/${CODE}/ResonaUI`, { params: { ...p, Key: APIKey } });
+// POST / PUT
+axios.post(`/api/v2/tunnel/${CODE}/ResonaUI`, { ...p, Key: APIKey });
+axios.put (`/api/v2/tunnel/${CODE}/api/items/1`, { ...p, Key: APIKey });
+// DELETE
+axios.delete(`/api/v2/tunnel/${CODE}/api/items/1`, { params: { Key: APIKey } });
+```
+
+设备收到的 path 为剥掉 `/tunnel/<设备码>` 后的部分（query / body 中的 Key 已剔除）。
+
+<Callout type="warn">
+**错误码**：设备码不存在 `404` ｜ 设备不在线 `503` ｜ key 无效 `401` ｜ 未开服务 / 封禁 `403` ｜ 等待响应头 15s 超时 `504` ｜ 断线 / 帧错误 `502`。全部端点 **noQuota**。
+</Callout>

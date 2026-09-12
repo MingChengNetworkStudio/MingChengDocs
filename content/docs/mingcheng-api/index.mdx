@@ -13,7 +13,7 @@ import {
   CreditCardIcon,
   MagicWandIcon,
   WrenchIcon,
-  BroadcastIcon,
+  NetworkIcon,
 } from "@phosphor-icons/react/dist/ssr";
 
 # 简介
@@ -125,11 +125,11 @@ https://api.b4qaq.cn/api/v2/payment/afdian/webhook
     兼容弱网设备的异步 AI 对话 / 工具调用任务（轮询取结果）
   </Card>
   <Card
-    icon={<BroadcastIcon className="text-pink-400" weight="duotone" />}
-    title="B 站设备桥接"
-    href="/docs/mingcheng-api/bilibili"
+    icon={<NetworkIcon className="text-pink-400" weight="duotone" />}
+    title="设备隧道"
+    href="/docs/mingcheng-api/tunnel"
   >
-    BiliMax 手机端转码桥接：WebSocket 接入与 App HTTP 调用
+    多路复用流式 WebSocket 反向隧道：标准 HTTP 访问设备本机 / 局域网主机
   </Card>
   <Card
     icon={<MegaphoneIcon className="text-orange-400" weight="duotone" />}
