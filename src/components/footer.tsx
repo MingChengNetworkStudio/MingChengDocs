@@ -23,7 +23,14 @@ export function Footer() {
           </div>
 
           <div className="flex flex-col items-center gap-1 text-xs text-fd-muted-foreground md:items-start">
-            <p>版权所有 2026</p>
+            <a
+              href="https://github.com/AstralSightStudios/AstroBox-NG-Plugin-Docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-fd-muted-foreground"
+            >
+              <p>本文档基于AstroBox-NG-Plugin-Docs项目构建</p>
+            </a>
             <p>
               文档内容遵循{" "}
               <Link
